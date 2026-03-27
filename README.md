@@ -1,6 +1,6 @@
 # Quantfolio
 
-A machine learning-powered stock prediction dashboard that uses ensemble models to predict next-day stock prices with a web-based UI.
+A patient investor's ML toolkit that combines quantitative signals with value principles. One-click dashboard, two ensemble models, zero dependencies on Wall Street.
 
 ## Architecture
 
