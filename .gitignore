@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Data (auto-downloaded at runtime)
+data_cache/
+
+# Backtest output images
+*.png
+
+# Intermediate model versions
+finance_model_v3_advanced.py
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/

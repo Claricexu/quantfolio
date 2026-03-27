@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Finance Ensemble Predictor</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg-base: #020617; --bg-card: #0f172a; --bg-cell: #1e293b;
+    --bg-row-even: #0c1524; --bg-row-odd: #0f172a; --bg-hover: #162032;
+    --border: #1e293b; --border-light: #334155;
+    --text-primary: #f1f5f9; --text-secondary: #e2e8f0;
+    --text-muted: #94a3b8; --text-dim: #64748b; --text-faint: #475569;
+    --text-ghost: #334155;
+    --green-bg: #0d3320; --green-text: #34d399; --green-border: #166534;
+    --red-bg: #3b1118; --red-text: #fb7185; --red-border: #881337;
+    --yellow-bg: #2a2510; --yellow-text: #fbbf24; --yellow-border: #854d0e;
+    --purple-bg: #1e1333; --purple-text: #c084fc; --purple-border: #6b21a8;
+    --blue: #3b82f6; --blue-light: #60a5fa; --blue-dark: #2563eb;
+    --mono: 'JetBrains Mono', monospace; --sans: 'Inter', -apple-system, sans-serif;
+  }
+  html { background: var(--bg-base); color: var(--text-secondary); }
+  body { font-family: var(--sans); min-height: 100vh; }
+  input::placeholder { color: var(--text-faint); }
+  input:focus, select:focus { outline: none; }
+  a { color: var(--blue-light); text-decoration: none; }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes fadeUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+  @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+
+  .noise {
+    position: fixed; inset: 0; opacity: 0.03; pointer-events: none; z-index: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .container { position: relative; z-index: 1; max-width: 1060px; margin: 0 auto; padding: 32px 20px; }
+  .fade-in { animation: fadeUp 0.4s ease-out; }
+
+  /* Header */
+  .header-dot { width:10px; height:10px; border-radius:50%; background:var(--green-text);
+    box-shadow:0 0 12px var(--green-text); animation: pulse 2s infinite; }
+  .header-label { font-size:11px; color:var(--text-dim); letter-spacing:2px; text-transform:uppercase; font-weight:600; }
+  h1 { font-size:36px; font-weight:800; letter-spacing:-1.5px; font-family:var(--mono);
+    background: linear-gradient(135deg, var(--text-primary) 0%, var(--blue-light) 50%, var(--green-text) 100%);
+    -webkit-background-clip:text; -webkit-text-fill-color:transparent; line-height:1.1; }
+  .date { font-size:13px; color:var(--text-faint); margin-top:6px; }
+
+  /* Tabs */
+  .tabs { display:flex; gap:2px; background:var(--bg-card); border-radius:8px; padding:3px;
+    border:1px solid var(--border); width:fit-content; margin-bottom:24px; }
+  .tab { padding:8px 20px; border-radius:6px; border:none; cursor:pointer; font-size:13px;
+    font-weight:600; font-family:var(--sans); letter-spacing:0.3px; transition:all 0.2s;
+    background:transparent; color:var(--text-dim); }
+  .tab.active { background:var(--bg-cell); color:var(--text-primary); box-shadow:0 1px 4px rgba(0,0,0,0.3); }
+
+  /* Buttons */
+  .search-row { display:flex; gap:10px; margin-bottom:8px; }
+  .search-input { flex:1; padding:14px 18px; background:var(--bg-card); border:1px solid var(--border);
+    border-radius:10px; color:var(--text-primary); font-size:16px; font-family:var(--mono);
+    font-weight:600; letter-spacing:1px; transition:border-color 0.2s; }
+  .search-input:focus { border-color: var(--blue); }
+  .btn { padding:14px 28px; border-radius:10px; border:none; font-size:14px; font-weight:700;
+    cursor:pointer; font-family:var(--sans); letter-spacing:0.5px; transition:all 0.2s; }
+  .btn-primary { background:linear-gradient(135deg, var(--blue), var(--blue-dark)); color:#fff;
+    box-shadow:0 2px 12px rgba(59,130,246,0.3); }
+  .btn-compare { background:linear-gradient(135deg, #7c3aed, #6d28d9); color:#fff;
+    box-shadow:0 2px 12px rgba(124,58,237,0.3); }
+  .btn:disabled { opacity:0.4; cursor:wait; box-shadow:none; background:var(--bg-cell); }
+  .btn-sm { padding:8px 16px; border-radius:8px; border:1px solid var(--border);
+    background:var(--bg-card); color:var(--text-muted); font-size:12px; cursor:pointer; font-weight:600;
+    transition:all 0.15s; }
+  .btn-sm:hover { border-color:var(--blue); color:var(--blue-light); }
+  .search-hint { font-size:11px; color:var(--text-ghost); padding-left:4px; margin-bottom:16px; }
+
+  /* Chips */
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:28px; }
+  .chip { padding:6px 14px; border-radius:6px; background:var(--bg-card); border:1px solid var(--border);
+    color:var(--text-muted); font-size:12px; cursor:pointer; font-family:var(--mono); font-weight:600;
+    transition:all 0.15s; }
+  .chip:hover { border-color:var(--blue); color:var(--blue-light); }
+
+  /* Cards */
+  .card { background:var(--bg-card); border:1px solid var(--border); border-radius:12px;
+    padding:24px; margin-top:16px; box-shadow:0 4px 24px rgba(0,0,0,0.3); }
+  .pred-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; }
+  .pred-symbol { font-size:28px; font-weight:800; color:var(--text-primary); font-family:var(--mono); letter-spacing:-1px; }
+  .price-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-bottom:20px; }
+  .price-box { border-radius:8px; padding:14px; }
+  .price-box .label { font-size:10px; color:var(--text-dim); letter-spacing:1px; margin-bottom:4px; text-transform:uppercase; font-weight:600; }
+  .price-box .value { font-size:22px; font-weight:700; font-family:var(--mono); }
+  .model-row { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+  .model-chip { background:var(--bg-cell); border-radius:6px; padding:8px 14px; flex:1 1 100px; min-width:100px; }
+  .model-chip .name { font-size:10px; color:var(--text-dim); margin-bottom:2px; font-weight:600; }
+  .model-chip .val { font-size:16px; color:var(--text-secondary); font-family:var(--mono); font-weight:600; }
+  .svr-grid { display:grid; gap:12px; margin-bottom:16px; }
+  .svr-box { border-radius:8px; padding:12px 16px; }
+  .svr-box .label { font-size:10px; color:var(--text-dim); letter-spacing:1px; margin-bottom:4px; text-transform:uppercase; font-weight:600; }
+  .svr-box .value { font-weight:800; font-family:var(--mono); }
+  .svr-hint { font-size:9px; color:var(--text-faint); margin-top:2px; }
+  .stats-row { display:flex; gap:16px; flex-wrap:wrap; font-size:12px; color:var(--text-dim);
+    border-top:1px solid var(--border); padding-top:14px; }
+  .stats-row strong { color:var(--text-muted); }
+
+  /* Signals */
+  .signal { display:inline-block; padding:2px 10px; border-radius:4px; font-weight:700;
+    font-size:12px; letter-spacing:1px; font-family:var(--mono); }
+  .signal-BUY  { background:var(--green-bg); color:var(--green-text); border:1px solid var(--green-border); }
+  .signal-SELL { background:var(--red-bg); color:var(--red-text); border:1px solid var(--red-border); }
+  .signal-HOLD { background:var(--yellow-bg); color:var(--yellow-text); border:1px solid var(--yellow-border); }
+  .pct { font-weight:700; font-family:var(--mono); font-size:14px; }
+  .pct-up   { color:var(--green-text); }
+  .pct-down { color:var(--red-text); }
+  .conf-HIGH    { color:var(--green-text); }
+  .conf-MEDIUM  { color:var(--yellow-text); }
+  .conf-CONFLICT{ color:var(--red-text); }
+  .conf-NEUTRAL { color:var(--text-dim); }
+
+  /* Tables */
+  .tbl-wrap { border-radius:10px; overflow:hidden; border:1px solid var(--border); margin-bottom:24px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  thead tr { background:var(--bg-card); }
+  th { padding:10px 14px; text-align:left; color:var(--text-faint); font-weight:600; font-size:10px;
+    letter-spacing:1px; text-transform:uppercase; border-bottom:1px solid var(--border); }
+  th.sortable { cursor:pointer; user-select:none; }
+  th.sortable:hover { color:var(--blue-light); }
+  tbody tr { transition: background 0.15s; }
+  tbody tr:nth-child(even) { background: var(--bg-row-even); }
+  tbody tr:nth-child(odd)  { background: var(--bg-row-odd); }
+  tbody tr:hover { background: var(--bg-hover); }
+  td { padding:10px 14px; }
+  td.mono { font-family:var(--mono); }
+  .svr-cell { font-family:var(--mono); font-size:12px; font-weight:600; }
+
+  /* Summary cards for report */
+  .summary-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px,1fr)); gap:12px; margin-bottom:24px; }
+  .summary-card { background:var(--bg-card); border:1px solid var(--border); border-radius:10px; padding:16px; text-align:center; }
+  .summary-card .sc-value { font-size:28px; font-weight:800; font-family:var(--mono); margin-bottom:4px; }
+  .summary-card .sc-label { font-size:10px; color:var(--text-dim); letter-spacing:1px; text-transform:uppercase; font-weight:600; }
+
+  /* Sentiment badge */
+  .sentiment { display:inline-block; padding:6px 16px; border-radius:20px; font-weight:800;
+    font-size:14px; letter-spacing:1.5px; font-family:var(--mono); }
+  .sentiment-BULLISH { background:var(--green-bg); color:var(--green-text); border:1px solid var(--green-border); }
+  .sentiment-BEARISH { background:var(--red-bg); color:var(--red-text); border:1px solid var(--red-border); }
+  .sentiment-MIXED   { background:var(--yellow-bg); color:var(--yellow-text); border:1px solid var(--yellow-border); }
+
+  /* Section headers */
+  .section-label { font-size:13px; color:var(--text-muted); letter-spacing:1.5px; text-transform:uppercase;
+    margin-bottom:10px; font-weight:600; display:flex; align-items:center; gap:8px; }
+
+  /* Loader */
+  .loader { display:flex; align-items:center; gap:10px; padding:20px; color:var(--text-muted); }
+  .spinner { width:18px; height:18px; border:2px solid var(--text-ghost);
+    border-top:2px solid var(--blue-light); border-radius:50%; animation:spin 0.8s linear infinite; }
+  .error-box { background:var(--red-bg); border:1px solid var(--red-border); border-radius:10px;
+    padding:20px; color:var(--red-text); margin-top:16px; }
+  .scan-banner { background:#1a1a2e; border:1px solid #2d2b55; border-radius:8px; padding:12px 16px;
+    font-size:12px; color:var(--text-muted); margin-bottom:16px; display:flex; align-items:center; gap:10px; }
+
+  /* Compare side-by-side */
+  .compare-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:20px; }
+  .compare-col { background:var(--bg-cell); border-radius:10px; padding:16px; border:1px solid var(--border); }
+  .compare-col .col-title { font-size:12px; color:var(--text-dim); letter-spacing:1px; text-transform:uppercase;
+    font-weight:700; margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+  .compare-col .col-dot { width:8px; height:8px; border-radius:50%; }
+  .compare-metric { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--border); }
+  .compare-metric:last-child { border-bottom:none; }
+  .compare-metric .cm-label { font-size:11px; color:var(--text-dim); }
+  .compare-metric .cm-value { font-size:13px; font-weight:600; font-family:var(--mono); color:var(--text-secondary); }
+
+  /* Consensus banner */
+  .consensus-box { border-radius:10px; padding:20px; text-align:center; margin-bottom:20px; }
+  .consensus-label { font-size:11px; color:var(--text-dim); letter-spacing:1px; text-transform:uppercase; margin-bottom:8px; }
+  .consensus-signal { font-size:24px; font-weight:800; font-family:var(--mono); }
+
+  /* Footer */
+  .footer { margin-top:48px; padding-top:20px; border-top:1px solid var(--bg-card);
+    font-size:11px; color:var(--text-ghost); text-align:center; line-height:1.6; }
+  .footer strong { color:var(--text-faint); }
+
+  @media (max-width: 700px) {
+    h1 { font-size: 24px; }
+    .price-grid { grid-template-columns: 1fr; }
+    .compare-grid { grid-template-columns: 1fr; }
+    .svr-grid { grid-template-columns: 1fr !important; }
+    .summary-grid { grid-template-columns: repeat(2, 1fr); }
+    .pred-symbol { font-size: 22px; }
+  }
+</style>
+</head>
+<body>
+<div class="noise"></div>
+<div class="container">
+
+  <!-- Header -->
+  <div style="margin-bottom:32px" class="fade-in">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <div class="header-dot"></div>
+      <span class="header-label">Market Intelligence Engine - Live</span>
+    </div>
+    <h1>Ensemble Predictor</h1>
+    <p class="date" id="dateStr"></p>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab active" data-tab="lookup" onclick="switchTab('lookup')">Ticker Lookup</button>
+    <button class="tab" data-tab="report" onclick="switchTab('report')">Daily Report</button>
+  </div>
+
+  <!-- ================================================================= -->
+  <!--  LOOKUP TAB                                                        -->
+  <!-- ================================================================= -->
+  <div id="tab-lookup" class="fade-in">
+    <div class="search-row">
+      <input class="search-input" id="tickerInput" type="text" placeholder="Enter ticker symbol (e.g. AAPL)"
+             onkeydown="if(event.key==='Enter')runPredict()" />
+      <button class="btn btn-primary" id="btnPredict" onclick="runPredict()">Predict</button>
+      <button class="btn btn-compare" id="btnCompare" onclick="runCompare()">Compare Both</button>
+    </div>
+
+    <!-- Hyperparameter Controls (for single model) -->
+    <div id="singleModelControls" style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin:10px 0 6px;padding:12px 16px;background:var(--bg-card);border:1px solid var(--border);border-radius:10px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <label style="font-size:11px;color:var(--text-dim);letter-spacing:0.5px;white-space:nowrap">Model</label>
+        <div id="modelToggle" style="display:flex;border-radius:6px;overflow:hidden;border:1px solid var(--border)">
+          <button class="mtog active" data-ver="v3" onclick="setModel('v3')" style="padding:4px 12px;font-size:11px;font-family:var(--mono);font-weight:600;border:none;cursor:pointer;transition:all 0.15s;background:var(--blue);color:#fff">V3 Stacking</button>
+          <button class="mtog" data-ver="v2" onclick="setModel('v2')" style="padding:4px 12px;font-size:11px;font-family:var(--mono);font-weight:600;border:none;cursor:pointer;transition:all 0.15s;background:var(--bg-base);color:var(--text-dim)">V2 RF+XGB</button>
+        </div>
+      </div>
+      <div style="width:1px;height:20px;background:var(--border)"></div>
+      <div id="v2Controls" style="display:none;align-items:center;gap:8px">
+        <label style="font-size:11px;color:var(--text-dim);letter-spacing:0.5px;white-space:nowrap">RF</label>
+        <input type="range" id="rfWeight" min="0" max="100" value="80" style="width:60px" oninput="document.getElementById('rfLabel').textContent=this.value+'%'; document.getElementById('xgbLabel').textContent=(100-this.value)+'%'">
+        <span id="rfLabel" style="font-size:11px;color:var(--text-muted);font-family:var(--mono);min-width:28px">80%</span>
+        <label style="font-size:11px;color:var(--text-dim);margin-left:4px">XGB</label>
+        <span id="xgbLabel" style="font-size:11px;color:var(--text-muted);font-family:var(--mono);min-width:28px">20%</span>
+        <div style="width:1px;height:20px;background:var(--border);margin:0 4px"></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <label style="font-size:11px;color:var(--text-dim);letter-spacing:0.5px;white-space:nowrap">Train Window</label>
+        <select id="rollingWindow" style="padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-base);color:var(--text-secondary);font-size:12px;font-family:var(--mono)">
+          <option value="0" selected>All data</option>
+          <option value="504">2 years</option>
+          <option value="1260">5 years</option>
+          <option value="756">3 years</option>
+          <option value="252">1 year</option>
+        </select>
+      </div>
+    </div>
+    <p class="search-hint" id="modelHint">V3: Stacking Ensemble (LightGBM + XGBoost + RF -> Ridge meta) | 37 features | prediction rescaling | +/-2% threshold</p>
+
+    <div id="predResult"></div>
+
+    <div style="margin-top:28px">
+      <div style="font-size:11px;color:var(--text-faint);letter-spacing:1px;margin-bottom:10px;text-transform:uppercase;font-weight:600">Quick Access</div>
+      <div class="chips" id="quickChips"></div>
+    </div>
+  </div>
+
+  <!-- ================================================================= -->
+  <!--  DAILY REPORT TAB                                                  -->
+  <!-- ================================================================= -->
+  <div id="tab-report" style="display:none" class="fade-in">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px">
+      <div>
+        <h2 style="font-size:20px;font-weight:700;color:var(--text-primary);margin-bottom:4px">Dual-Model Daily Report</h2>
+        <p style="font-size:12px;color:var(--text-faint)">Both V2 (RF+XGB) and V3 (Stacking) run on every symbol. Consensus signals show where both models agree.</p>
+      </div>
+      <button class="btn-sm" onclick="refreshReport()" id="btnRefreshReport">Generate Report</button>
+    </div>
+    <div id="reportStatus"></div>
+    <div id="reportContent"></div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <p><strong>Disclaimer:</strong> For educational and research purposes only.
+    Predictions are ML model outputs - not investment advice. Past performance does not equal future results.</p>
+    <p>V3 Stacking (LightGBM + XGBoost + RF -> Ridge) | V2 (RF + XGBoost) | 37 / 13 Features | Prediction Rescaling | +/-2% Threshold</p>
+  </div>
+</div>
+
+<script>
+// =================================================================
+//  CONFIG
+// =================================================================
+const API_BASE = window.location.origin;
+const QUICK_SYMBOLS = [
+  "SPY","QQQ","AAPL","MSFT","NVDA","TSLA","AMZN","META",
+  "GOOGL","JPM","GLD","AMD","LLY","AVGO","XOM","UNH"
+];
+
+// Init
+document.getElementById('dateStr').textContent = new Date()
+  .toLocaleDateString('en-US', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+
+const chipsEl = document.getElementById('quickChips');
+QUICK_SYMBOLS.forEach(sym => {
+  const btn = document.createElement('button');
+  btn.className = 'chip';
+  btn.textContent = sym;
+  btn.onclick = () => { document.getElementById('tickerInput').value = sym; runCompare(); };
+  chipsEl.appendChild(btn);
+});
+
+
+// =================================================================
+//  HELPERS
+// =================================================================
+function fmt$(v) { return v != null ? '$' + Number(v).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) : '\u2014'; }
+function fmtCap(v) {
+  if (!v) return '\u2014';
+  if (v >= 1e12) return '$' + (v/1e12).toFixed(1) + 'T';
+  if (v >= 1e9) return '$' + (v/1e9).toFixed(1) + 'B';
+  return '$' + (v/1e6).toFixed(0) + 'M';
+}
+function signalHTML(sig) { return `<span class="signal signal-${sig}">${sig}</span>`; }
+function pctHTML(val) {
+  if (val == null) return '\u2014';
+  const cls = val >= 0 ? 'pct-up' : 'pct-down';
+  const arrow = val >= 0 ? '\u25B2' : '\u25BC';
+  return `<span class="pct ${cls}">${arrow} ${Math.abs(val).toFixed(2)}%</span>`;
+}
+function svrColor(svr) {
+  if (svr == null) return 'var(--text-ghost)';
+  if (svr < 3) return 'var(--green-text)';
+  if (svr < 8) return 'var(--yellow-text)';
+  return 'var(--red-text)';
+}
+function svrLabel(svr) {
+  if (svr == null) return '';
+  if (svr < 3) return 'Undervalued';
+  if (svr < 8) return 'Fair Value';
+  return 'Expensive';
+}
+function loaderHTML(text) {
+  return `<div class="loader"><div class="spinner"></div>${text}</div>`;
+}
+function signalBg(sig) {
+  if (sig === 'BUY') return 'var(--green-bg)';
+  if (sig === 'SELL') return 'var(--red-bg)';
+  return 'var(--yellow-bg)';
+}
+function signalBorder(sig) {
+  if (sig === 'BUY') return 'var(--green-border)';
+  if (sig === 'SELL') return 'var(--red-border)';
+  return 'var(--yellow-border)';
+}
+function signalColor(sig) {
+  if (sig === 'BUY') return 'var(--green-text)';
+  if (sig === 'SELL') return 'var(--red-text)';
+  return 'var(--yellow-text)';
+}
+
+
+// =================================================================
+//  TAB SWITCHING
+// =================================================================
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  document.getElementById('tab-lookup').style.display = tab === 'lookup' ? '' : 'none';
+  document.getElementById('tab-report').style.display = tab === 'report' ? '' : 'none';
+  if (tab === 'report') loadReport();
+  if (tab === 'lookup') document.getElementById('tickerInput').focus();
+}
+
+
+// =================================================================
+//  MODEL TOGGLE (single predict)
+// =================================================================
+let selectedModel = 'v3';
+
+function setModel(ver) {
+  selectedModel = ver;
+  document.querySelectorAll('#modelToggle .mtog').forEach(b => {
+    const isActive = b.dataset.ver === ver;
+    b.style.background = isActive ? 'var(--blue)' : 'var(--bg-base)';
+    b.style.color = isActive ? '#fff' : 'var(--text-dim)';
+  });
+  document.getElementById('v2Controls').style.display = ver === 'v2' ? 'flex' : 'none';
+  document.getElementById('modelHint').textContent = ver === 'v3'
+    ? 'V3: Stacking Ensemble (LightGBM + XGBoost + RF -> Ridge meta) | 37 features | prediction rescaling | +/-2% threshold'
+    : 'V2: Random Forest (80%) + XGBoost (20%) | 13 features | prediction rescaling | +/-2% threshold';
+}
+
+
+// =================================================================
+//  SINGLE TICKER PREDICTION
+// =================================================================
+async function runPredict() {
+  const sym = document.getElementById('tickerInput').value.trim().toUpperCase();
+  if (!sym) return;
+  const btn = document.getElementById('btnPredict');
+  const out = document.getElementById('predResult');
+
+  const rfPct = parseInt(document.getElementById('rfWeight').value);
+  const weightRf = rfPct / 100;
+  const weightXgb = (100 - rfPct) / 100;
+  const rollingWindow = parseInt(document.getElementById('rollingWindow').value) || 0;
+  const version = selectedModel;
+
+  btn.disabled = true;
+  btn.textContent = version === 'v3' ? 'Training V3\u2026' : 'Training V2\u2026';
+  out.innerHTML = loaderHTML(version === 'v3' ? 'Building stacking ensemble\u2026' : 'Running RF + XGBoost ensemble\u2026');
+
+  try {
+    let url = `${API_BASE}/api/predict/${encodeURIComponent(sym)}?version=${version}&weight_rf=${weightRf}&weight_xgb=${weightXgb}`;
+    if (rollingWindow > 0) url += `&rolling_window=${rollingWindow}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      out.innerHTML = `<div class="error-box"><strong>${sym}</strong>: ${err.detail || 'Unknown error'}</div>`;
+      return;
+    }
+    const d = await res.json();
+    out.innerHTML = buildSingleCard(d);
+  } catch (e) {
+    out.innerHTML = `<div class="error-box"><strong>Connection error</strong>: ${e.message}<br>Make sure the API server is running.</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Predict';
+  }
+}
+
+function buildSingleCard(d) {
+  const models = d.model_predictions || {};
+  const modelChips = Object.entries(models).map(([n,v]) =>
+    `<div class="model-chip"><div class="name">${n}</div><div class="val">${fmt$(v)}</div></div>`
+  ).join('');
+
+  let svrBlock = '';
+  if (d.svr != null) {
+    svrBlock = `
+      <div class="svr-grid" style="grid-template-columns:1fr 1fr 1fr">
+        <div class="svr-box" style="background:#1a1a2e;border:1px solid ${d.svr<3?'var(--green-border)':d.svr<8?'var(--yellow-border)':'var(--red-border)'}">
+          <div class="label">SVR</div>
+          <div class="value" style="font-size:22px;color:${svrColor(d.svr)}">${d.svr.toFixed(1)}x</div>
+          <div class="svr-hint">${svrLabel(d.svr)}</div>
+        </div>
+        <div class="svr-box" style="background:var(--bg-cell)"><div class="label">Market Cap</div>
+          <div class="value" style="font-size:16px;color:var(--text-secondary)">${fmtCap(d.market_cap)}</div></div>
+        <div class="svr-box" style="background:var(--bg-cell)"><div class="label">Qtr Revenue</div>
+          <div class="value" style="font-size:16px;color:var(--text-secondary)">${fmtCap(d.quarterly_revenue)}</div></div>
+      </div>`;
+  } else {
+    svrBlock = `<div style="background:var(--bg-cell);border-radius:8px;padding:10px 16px;font-size:12px;color:var(--text-faint);margin-bottom:16px">SVR: N/A - ETF or fundamental data unavailable</div>`;
+  }
+
+  const bt = d.backtest ? `
+    <div style="margin-bottom:16px">
+      <div style="font-size:11px;color:var(--text-dim);letter-spacing:1px;margin-bottom:10px;text-transform:uppercase">Backtest (${d.backtest.test_days} days)</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+        <div style="background:var(--bg-cell);border-radius:8px;padding:10px 14px">
+          <div style="font-size:10px;color:var(--text-dim);margin-bottom:3px">Strategy</div>
+          <div style="font-size:18px;font-weight:700;font-family:var(--mono);color:${d.backtest.strategy_return>=0?'var(--green-text)':'var(--red-text)'}">${d.backtest.strategy_return>=0?'+':''}${d.backtest.strategy_return}%</div>
+        </div>
+        <div style="background:var(--bg-cell);border-radius:8px;padding:10px 14px">
+          <div style="font-size:10px;color:var(--text-dim);margin-bottom:3px">Buy & Hold</div>
+          <div style="font-size:18px;font-weight:700;font-family:var(--mono);color:${d.backtest.buyhold_return>=0?'var(--green-text)':'var(--red-text)'}">${d.backtest.buyhold_return>=0?'+':''}${d.backtest.buyhold_return}%</div>
+        </div>
+        <div style="background:var(--bg-cell);border-radius:8px;padding:10px 14px">
+          <div style="font-size:10px;color:var(--text-dim);margin-bottom:3px">Sharpe</div>
+          <div style="font-size:18px;font-weight:700;font-family:var(--mono);color:var(--text-secondary)">${d.backtest.sharpe}</div>
+        </div>
+        <div style="background:var(--bg-cell);border-radius:8px;padding:10px 14px">
+          <div style="font-size:10px;color:var(--text-dim);margin-bottom:3px">Max DD</div>
+          <div style="font-size:18px;font-weight:700;font-family:var(--mono);color:var(--red-text)">${d.backtest.max_drawdown}%</div>
+        </div>
+      </div>
+    </div>` : '';
+
+  return `
+    <div class="card fade-in">
+      <div class="pred-header">
+        <div style="display:flex;align-items:center;gap:14px">
+          <span class="pred-symbol">${d.symbol}</span>
+          ${signalHTML(d.signal)}
+        </div>
+        ${pctHTML(d.pct_change)}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px">
+        <div class="price-box" style="background:var(--bg-cell)">
+          <div class="label">Current Price</div>
+          <div class="value" style="color:var(--text-secondary)">${fmt$(d.current_price)}</div>
+        </div>
+        <div class="price-box" style="background:${d.pct_change>=0?'var(--green-bg)':'var(--red-bg)'};border:1px solid ${d.pct_change>=0?'var(--green-border)':'var(--red-border)'}">
+          <div class="label">Predicted (Next Day)</div>
+          <div class="value" style="color:${d.pct_change>=0?'var(--green-text)':'var(--red-text)'}">${fmt$(d.predicted_price)}</div>
+        </div>
+      </div>
+      <div style="margin-bottom:16px">
+        <div style="font-size:11px;color:var(--text-dim);letter-spacing:1px;margin-bottom:8px;text-transform:uppercase">Model Breakdown</div>
+        <div class="model-row">${modelChips}</div>
+      </div>
+      ${svrBlock}
+      ${bt}
+      <div class="stats-row">
+        <span>Model: <strong>${d.model_version || 'V2 RF+XGB'}</strong></span>
+        <span>Scale: <strong>${d.scale_factor ? d.scale_factor+'x' : '\u2014'}</strong></span>
+        <span>Dir Acc: <strong>${d.direction_accuracy ? d.direction_accuracy+'%' : '\u2014'}</strong></span>
+        <span>MAE: <strong>${d.backtest_mae_pct ? d.backtest_mae_pct+'%' : '\u2014'}</strong></span>
+        <span>Through: <strong>${d.last_date}</strong></span>
+      </div>
+    </div>`;
+}
+
+
+// =================================================================
+//  COMPARE BOTH MODELS
+// =================================================================
+async function runCompare() {
+  const sym = document.getElementById('tickerInput').value.trim().toUpperCase();
+  if (!sym) return;
+  const btn = document.getElementById('btnCompare');
+  const out = document.getElementById('predResult');
+
+  btn.disabled = true; btn.textContent = 'Comparing\u2026';
+  out.innerHTML = loaderHTML('Running V2 (RF+XGB) and V3 (Stacking) side by side\u2026');
+
+  try {
+    const res = await fetch(`${API_BASE}/api/predict-compare/${encodeURIComponent(sym)}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      out.innerHTML = `<div class="error-box"><strong>${sym}</strong>: ${err.detail || 'Unknown error'}</div>`;
+      return;
+    }
+    const d = await res.json();
+    out.innerHTML = buildCompareCard(d);
+  } catch (e) {
+    out.innerHTML = `<div class="error-box"><strong>Connection error</strong>: ${e.message}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Compare Both';
+  }
+}
+
+function buildCompareCard(d) {
+  const v2 = d.v2;
+  const v3 = d.v3;
+  const cs = d.consensus_signal;
+  const conf = d.confidence;
+
+  // Consensus banner
+  const consBg = signalBg(cs);
+  const consBorder = signalBorder(cs);
+  const consColor = signalColor(cs);
+
+  let svrBlock = '';
+  if (d.svr != null) {
+    svrBlock = `
+      <div class="svr-grid" style="grid-template-columns:1fr 1fr 1fr">
+        <div class="svr-box" style="background:#1a1a2e;border:1px solid ${d.svr<3?'var(--green-border)':d.svr<8?'var(--yellow-border)':'var(--red-border)'}">
+          <div class="label">SVR</div>
+          <div class="value" style="font-size:20px;color:${svrColor(d.svr)}">${d.svr.toFixed(1)}x</div>
+          <div class="svr-hint">${svrLabel(d.svr)}</div>
+        </div>
+        <div class="svr-box" style="background:var(--bg-cell)"><div class="label">Market Cap</div>
+          <div class="value" style="font-size:15px;color:var(--text-secondary)">${fmtCap(d.market_cap)}</div></div>
+        <div class="svr-box" style="background:var(--bg-cell)"><div class="label">Qtr Revenue</div>
+          <div class="value" style="font-size:15px;color:var(--text-secondary)">${fmtCap(d.quarterly_revenue)}</div></div>
+      </div>`;
+  }
+
+  function modelCol(m, label, dotColor) {
+    if (!m) return `<div class="compare-col"><div class="col-title"><div class="col-dot" style="background:${dotColor}"></div>${label}</div><div style="color:var(--text-faint);font-size:12px">Not available</div></div>`;
+    const preds = m.model_predictions || {};
+    const predsHTML = Object.entries(preds).map(([n,v]) =>
+      `<div class="compare-metric"><span class="cm-label">${n}</span><span class="cm-value">${fmt$(v)}</span></div>`
+    ).join('');
+    const bt = m.backtest || {};
+    return `
+      <div class="compare-col">
+        <div class="col-title"><div class="col-dot" style="background:${dotColor}"></div>${label}</div>
+        <div class="compare-metric"><span class="cm-label">Predicted</span><span class="cm-value" style="color:${m.pct_change>=0?'var(--green-text)':'var(--red-text)'}">${fmt$(m.predicted_price)}</span></div>
+        <div class="compare-metric"><span class="cm-label">Change</span><span class="cm-value" style="color:${m.pct_change>=0?'var(--green-text)':'var(--red-text)'}">${m.pct_change>=0?'+':''}${m.pct_change}%</span></div>
+        <div class="compare-metric"><span class="cm-label">Signal</span><span class="cm-value">${signalHTML(m.signal)}</span></div>
+        <div class="compare-metric"><span class="cm-label">Dir Accuracy</span><span class="cm-value">${m.direction_accuracy ? m.direction_accuracy+'%' : '\u2014'}</span></div>
+        <div class="compare-metric"><span class="cm-label">Scale Factor</span><span class="cm-value">${m.scale_factor ? m.scale_factor+'x' : '\u2014'}</span></div>
+        ${bt.strategy_return != null ? `
+        <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
+          <div style="font-size:9px;color:var(--text-dim);letter-spacing:1px;margin-bottom:6px;text-transform:uppercase">Backtest</div>
+          <div class="compare-metric"><span class="cm-label">Strategy</span><span class="cm-value" style="color:${bt.strategy_return>=0?'var(--green-text)':'var(--red-text)'}">${bt.strategy_return>=0?'+':''}${bt.strategy_return}%</span></div>
+          <div class="compare-metric"><span class="cm-label">Sharpe</span><span class="cm-value">${bt.sharpe}</span></div>
+          <div class="compare-metric"><span class="cm-label">Max DD</span><span class="cm-value" style="color:var(--red-text)">${bt.max_drawdown}%</span></div>
+        </div>` : ''}
+        <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
+          <div style="font-size:9px;color:var(--text-dim);letter-spacing:1px;margin-bottom:6px;text-transform:uppercase">Sub-models</div>
+          ${predsHTML}
+        </div>
+      </div>`;
+  }
+
+  return `
+    <div class="card fade-in">
+      <div class="pred-header">
+        <div style="display:flex;align-items:center;gap:14px">
+          <span class="pred-symbol">${d.symbol}</span>
+          <span style="font-size:12px;color:var(--text-dim);font-weight:600">${fmt$(d.current_price)}</span>
+        </div>
+        <span style="font-size:11px;color:var(--text-faint)">Through ${d.last_date}</span>
+      </div>
+
+      <!-- Consensus -->
+      <div class="consensus-box" style="background:${consBg};border:1px solid ${consBorder}">
+        <div class="consensus-label">Consensus Signal</div>
+        <div class="consensus-signal" style="color:${consColor}">${cs}</div>
+        <div style="font-size:11px;color:${consColor};margin-top:4px;opacity:0.8">Confidence: <strong class="conf-${conf}">${conf}</strong></div>
+      </div>
+
+      <!-- Side by side -->
+      <div class="compare-grid">
+        ${modelCol(v2, 'V2 RF+XGB (13 features)', 'var(--blue-light)')}
+        ${modelCol(v3, 'V3 Stacking (37 features)', 'var(--purple-text)')}
+      </div>
+
+      ${svrBlock}
+    </div>`;
+}
+
+
+// =================================================================
+//  DAILY REPORT
+// =================================================================
+let reportLoaded = false;
+
+async function loadReport() {
+  if (reportLoaded) return;
+  const el = document.getElementById('reportContent');
+  el.innerHTML = loaderHTML('Loading dual-model report\u2026');
+  try {
+    const res = await fetch(`${API_BASE}/api/report`);
+    const json = await res.json();
+    if (json.data) {
+      renderReport(json);
+      reportLoaded = true;
+    } else {
+      el.innerHTML = `<div class="scan-banner">No report data yet. Click "Generate Report" to run the first dual-model scan (takes 40\u201390 min).</div>`;
+    }
+  } catch (e) {
+    el.innerHTML = `<div class="error-box">Failed to load report: ${e.message}</div>`;
+  }
+}
+
+async function refreshReport() {
+  const statusEl = document.getElementById('reportStatus');
+  statusEl.innerHTML = `<div class="scan-banner"><div class="spinner"></div>
+    Dual-model scan started \u2014 running V2 + V3 on all symbols. This may take 40\u201390 minutes. Results auto-update.</div>`;
+  reportLoaded = false;
+  try {
+    await fetch(`${API_BASE}/api/report?refresh=true`);
+    pollReport(statusEl);
+  } catch (e) {
+    statusEl.innerHTML = `<div class="error-box">Failed to trigger report: ${e.message}</div>`;
+  }
+}
+
+function pollReport(statusEl) {
+  let attempts = 0;
+  const iv = setInterval(async () => {
+    attempts++;
+    try {
+      const res = await fetch(`${API_BASE}/api/report`);
+      const json = await res.json();
+      if (json.status === 'ok' && json.data && json.data.data && json.data.data.length > 0) {
+        clearInterval(iv);
+        statusEl.innerHTML = '';
+        renderReport(json);
+        reportLoaded = true;
+      } else if (attempts > 360) { // 30 min timeout on polling
+        clearInterval(iv);
+        statusEl.innerHTML = '<div class="scan-banner">Still running. Refresh the page later to check results.</div>';
+      }
+    } catch (_) {}
+  }, 5000);
+}
+
+function renderReport(json) {
+  const report = json.data;
+  if (!report || !report.data) return;
+  const summary = report.summary || {};
+  const data = report.data || [];
+  const el = document.getElementById('reportContent');
+  const statusEl = document.getElementById('reportStatus');
+
+  // Status bar
+  if (json.generated_at) {
+    const dt = new Date(json.generated_at);
+    const timeStr = dt.toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+    statusEl.innerHTML = `<div class="scan-banner" style="border-color:var(--green-border)">
+      Report generated: ${timeStr} | ${summary.total_symbols || data.length} symbols analyzed</div>`;
+  }
+
+  // Summary cards
+  const sentClass = `sentiment-${summary.market_sentiment || 'MIXED'}`;
+  const summaryHTML = `
+    <div style="text-align:center;margin-bottom:20px">
+      <div style="font-size:11px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Market Sentiment</div>
+      <span class="sentiment ${sentClass}">${summary.market_sentiment || 'MIXED'}</span>
+    </div>
+    <div class="summary-grid">
+      <div class="summary-card">
+        <div class="sc-value" style="color:var(--green-text)">${summary.consensus_buy || 0}</div>
+        <div class="sc-label">Consensus BUY</div>
+      </div>
+      <div class="summary-card">
+        <div class="sc-value" style="color:var(--red-text)">${summary.consensus_sell || 0}</div>
+        <div class="sc-label">Consensus SELL</div>
+      </div>
+      <div class="summary-card">
+        <div class="sc-value" style="color:var(--yellow-text)">${summary.consensus_hold || 0}</div>
+        <div class="sc-label">Consensus HOLD</div>
+      </div>
+      <div class="summary-card">
+        <div class="sc-value" style="color:var(--green-text)">${summary.high_confidence || 0}</div>
+        <div class="sc-label">High Confidence</div>
+      </div>
+      <div class="summary-card">
+        <div class="sc-value" style="color:var(--red-text)">${summary.model_conflict || 0}</div>
+        <div class="sc-label">Model Conflict</div>
+      </div>
+      <div class="summary-card">
+        <div class="sc-value" style="color:var(--text-secondary)">${summary.total_symbols || 0}</div>
+        <div class="sc-label">Total Symbols</div>
+      </div>
+    </div>`;
+
+  // High confidence actions first
+  const highConf = data.filter(r => r.confidence === 'HIGH');
+  const buys = highConf.filter(r => r.consensus_signal === 'BUY').sort((a,b) => (b.avg_pct_change||0) - (a.avg_pct_change||0));
+  const sells = highConf.filter(r => r.consensus_signal === 'SELL').sort((a,b) => (a.avg_pct_change||0) - (b.avg_pct_change||0));
+
+  let highConfHTML = '';
+  if (buys.length > 0) {
+    highConfHTML += `<div class="section-label" style="margin-top:8px"><span style="color:var(--green-text);font-size:16px">\u25B2</span> High-Confidence BUY (Both Models Agree)</div>`;
+    highConfHTML += buildReportTable(buys);
+  }
+  if (sells.length > 0) {
+    highConfHTML += `<div class="section-label"><span style="color:var(--red-text);font-size:16px">\u25BC</span> High-Confidence SELL (Both Models Agree)</div>`;
+    highConfHTML += buildReportTable(sells);
+  }
+  if (buys.length === 0 && sells.length === 0) {
+    highConfHTML += `<div class="scan-banner">No high-confidence signals today - models disagree or all HOLD.</div>`;
+  }
+
+  // Full table
+  const fullHTML = `
+    <div class="section-label" style="margin-top:8px"><span style="font-size:14px">\u25A6</span> All Symbols</div>
+    ${buildReportTable(data)}`;
+
+  el.innerHTML = summaryHTML + highConfHTML + fullHTML;
+}
+
+function buildReportTable(rows) {
+  const trs = rows.map(r => {
+    const v2 = r.v2 || {};
+    const v3 = r.v3 || {};
+    const v2pct = v2.pct_change != null ? v2.pct_change : null;
+    const v3pct = v3.pct_change != null ? v3.pct_change : null;
+    const svr = r.svr;
+    return `
+    <tr>
+      <td class="mono" style="font-weight:700;color:var(--text-primary)">${r.symbol}</td>
+      <td class="mono" style="color:var(--text-muted)">${fmt$(r.current_price)}</td>
+      <td>${v2pct != null ? pctHTML(v2pct) : '\u2014'}</td>
+      <td>${v2.signal ? signalHTML(v2.signal) : '\u2014'}</td>
+      <td>${v3pct != null ? pctHTML(v3pct) : '\u2014'}</td>
+      <td>${v3.signal ? signalHTML(v3.signal) : '\u2014'}</td>
+      <td>${signalHTML(r.consensus_signal)}</td>
+      <td><span class="conf-${r.confidence}" style="font-size:11px;font-weight:700;font-family:var(--mono)">${r.confidence}</span></td>
+      <td class="svr-cell" style="color:${svrColor(svr)}">${svr != null ? svr.toFixed(1)+'x' : '\u2014'}</td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Symbol</th><th>Price</th>
+          <th>V2 Chg</th><th>V2 Sig</th>
+          <th>V3 Chg</th><th>V3 Sig</th>
+          <th>Consensus</th><th>Conf</th><th>SVR</th>
+        </tr></thead>
+        <tbody>${trs}</tbody>
+      </table>
+    </div>`;
+}
+
+
+// Focus input on load
+document.getElementById('tickerInput').focus();
+</script>
+</body>
+</html>
