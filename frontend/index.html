@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Finance Ensemble Predictor</title>
+<title>Quantfolio</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -201,7 +201,7 @@
       <div class="header-dot"></div>
       <span class="header-label">Market Intelligence Engine - Live</span>
     </div>
-    <h1>Ensemble Predictor</h1>
+    <h1>Quantfolio</h1>
     <p class="date" id="dateStr"></p>
   </div>
 
@@ -227,8 +227,8 @@
       <div style="display:flex;align-items:center;gap:8px">
         <label style="font-size:11px;color:var(--text-dim);letter-spacing:0.5px;white-space:nowrap">Model</label>
         <div id="modelToggle" style="display:flex;border-radius:6px;overflow:hidden;border:1px solid var(--border)">
-          <button class="mtog active" data-ver="v3" onclick="setModel('v3')" style="padding:4px 12px;font-size:11px;font-family:var(--mono);font-weight:600;border:none;cursor:pointer;transition:all 0.15s;background:var(--blue);color:#fff">V3 Stacking</button>
-          <button class="mtog" data-ver="v2" onclick="setModel('v2')" style="padding:4px 12px;font-size:11px;font-family:var(--mono);font-weight:600;border:none;cursor:pointer;transition:all 0.15s;background:var(--bg-base);color:var(--text-dim)">V2 RF+XGB</button>
+          <button class="mtog active" data-ver="v3" onclick="setModel('v3')" style="padding:4px 12px;font-size:11px;font-family:var(--mono);font-weight:600;border:none;cursor:pointer;transition:all 0.15s;background:var(--blue);color:#fff">Pro</button>
+          <button class="mtog" data-ver="v2" onclick="setModel('v2')" style="padding:4px 12px;font-size:11px;font-family:var(--mono);font-weight:600;border:none;cursor:pointer;transition:all 0.15s;background:var(--bg-base);color:var(--text-dim)">Lite</button>
         </div>
       </div>
       <div style="width:1px;height:20px;background:var(--border)"></div>
@@ -251,7 +251,7 @@
         </select>
       </div>
     </div>
-    <p class="search-hint" id="modelHint">V3: Stacking Ensemble (LightGBM + XGBoost + RF -> Ridge meta) | 37 features | prediction rescaling | +/-2% threshold</p>
+    <p class="search-hint" id="modelHint">Pro: Stacking Ensemble (LightGBM + XGBoost + RF &#8594; Ridge meta) | 37 features | prediction rescaling | &#177;2% threshold</p>
 
     <div id="predResult"></div>
 
@@ -267,8 +267,8 @@
   <div id="tab-report" style="display:none" class="fade-in">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px">
       <div>
-        <h2 style="font-size:20px;font-weight:700;color:var(--text-primary);margin-bottom:4px">Dual-Model Daily Report</h2>
-        <p style="font-size:12px;color:var(--text-faint)">Both V2 (RF+XGB) and V3 (Stacking) run on every symbol. Consensus signals show where both models agree.</p>
+        <h2 style="font-size:20px;font-weight:700;color:var(--text-primary);margin-bottom:4px">Daily Report</h2>
+        <p style="font-size:12px;color:var(--text-faint)">Both Lite and Pro models run on every symbol. Consensus signals show where both models agree.</p>
       </div>
       <button class="btn-sm" onclick="refreshReport()" id="btnRefreshReport">Generate Report</button>
     </div>
@@ -280,7 +280,7 @@
   <div class="footer">
     <p><strong>Disclaimer:</strong> For educational and research purposes only.
     Predictions are ML model outputs - not investment advice. Past performance does not equal future results.</p>
-    <p>V3 Stacking (LightGBM + XGBoost + RF -> Ridge) | V2 (RF + XGBoost) | 37 / 13 Features | Prediction Rescaling | +/-2% Threshold</p>
+    <p>Pro: Stacking Ensemble (LightGBM + XGBoost + RF) | Lite: RF + XGBoost | 37 / 13 Features | Prediction Rescaling</p>
   </div>
 </div>
 
@@ -383,8 +383,8 @@ function setModel(ver) {
   });
   document.getElementById('v2Controls').style.display = ver === 'v2' ? 'flex' : 'none';
   document.getElementById('modelHint').textContent = ver === 'v3'
-    ? 'V3: Stacking Ensemble (LightGBM + XGBoost + RF -> Ridge meta) | 37 features | prediction rescaling | +/-2% threshold'
-    : 'V2: Random Forest (80%) + XGBoost (20%) | 13 features | prediction rescaling | +/-2% threshold';
+    ? 'Pro: Stacking Ensemble (LightGBM + XGBoost + RF \u2192 Ridge meta) | 37 features | prediction rescaling | \u00b12% threshold'
+    : 'Lite: Random Forest (80%) + XGBoost (20%) | 13 features | prediction rescaling | \u00b12% threshold';
 }
 
 
@@ -404,8 +404,8 @@ async function runPredict() {
   const version = selectedModel;
 
   btn.disabled = true;
-  btn.textContent = version === 'v3' ? 'Training V3\u2026' : 'Training V2\u2026';
-  out.innerHTML = loaderHTML(version === 'v3' ? 'Building stacking ensemble\u2026' : 'Running RF + XGBoost ensemble\u2026');
+  btn.textContent = version === 'v3' ? 'Training Pro\u2026' : 'Training Lite\u2026';
+  out.innerHTML = loaderHTML(version === 'v3' ? 'Building Pro stacking ensemble\u2026' : 'Running Lite ensemble\u2026');
 
   try {
     let url = `${API_BASE}/api/predict/${encodeURIComponent(sym)}?version=${version}&weight_rf=${weightRf}&weight_xgb=${weightXgb}`;
@@ -498,7 +498,7 @@ function buildSingleCard(d) {
       ${svrBlock}
       ${bt}
       <div class="stats-row">
-        <span>Model: <strong>${d.model_version || 'V2 RF+XGB'}</strong></span>
+        <span>Model: <strong>${d.model_version === 'v3' ? 'Pro' : d.model_version === 'v2' ? 'Lite' : d.model_version || 'Lite'}</strong></span>
         <span>Scale: <strong>${d.scale_factor ? d.scale_factor+'x' : '\u2014'}</strong></span>
         <span>Dir Acc: <strong>${d.direction_accuracy ? d.direction_accuracy+'%' : '\u2014'}</strong></span>
         <span>MAE: <strong>${d.backtest_mae_pct ? d.backtest_mae_pct+'%' : '\u2014'}</strong></span>
@@ -518,7 +518,7 @@ async function runCompare() {
   const out = document.getElementById('predResult');
 
   btn.disabled = true; btn.textContent = 'Comparing\u2026';
-  out.innerHTML = loaderHTML('Running V2 (RF+XGB) and V3 (Stacking) side by side\u2026');
+  out.innerHTML = loaderHTML('Running Lite and Pro models side by side\u2026');
 
   try {
     const res = await fetch(`${API_BASE}/api/predict-compare/${encodeURIComponent(sym)}`);
@@ -611,8 +611,8 @@ function buildCompareCard(d) {
 
       <!-- Side by side -->
       <div class="compare-grid">
-        ${modelCol(v2, 'V2 RF+XGB (13 features)', 'var(--blue-light)')}
-        ${modelCol(v3, 'V3 Stacking (37 features)', 'var(--purple-text)')}
+        ${modelCol(v2, 'Lite (13 features)', 'var(--blue-light)')}
+        ${modelCol(v3, 'Pro (37 features)', 'var(--purple-text)')}
       </div>
 
       ${svrBlock}
@@ -628,7 +628,7 @@ let reportLoaded = false;
 async function loadReport() {
   if (reportLoaded) return;
   const el = document.getElementById('reportContent');
-  el.innerHTML = loaderHTML('Loading dual-model report\u2026');
+  el.innerHTML = loaderHTML('Loading Lite + Pro report\u2026');
   try {
     const res = await fetch(`${API_BASE}/api/report`);
     const json = await res.json();
@@ -636,7 +636,7 @@ async function loadReport() {
       renderReport(json);
       reportLoaded = true;
     } else {
-      el.innerHTML = `<div class="scan-banner">No report data yet. Click "Generate Report" to run the first dual-model scan (takes 40\u201390 min).</div>`;
+      el.innerHTML = `<div class="scan-banner">No report data yet. Click "Generate Report" to run the first Lite + Pro scan (takes 40\u201390 min).</div>`;
     }
   } catch (e) {
     el.innerHTML = `<div class="error-box">Failed to load report: ${e.message}</div>`;
@@ -646,7 +646,7 @@ async function loadReport() {
 async function refreshReport() {
   const statusEl = document.getElementById('reportStatus');
   statusEl.innerHTML = `<div class="scan-banner"><div class="spinner"></div>
-    Dual-model scan started \u2014 running V2 + V3 on all symbols. This may take 40\u201390 minutes. Results auto-update.</div>`;
+    Scan started \u2014 running Lite + Pro on all symbols. This may take 40\u201390 minutes. Results auto-update.</div>`;
   reportLoaded = false;
   try {
     await fetch(`${API_BASE}/api/report?refresh=true`);
@@ -778,8 +778,8 @@ function buildReportTable(rows) {
       <table>
         <thead><tr>
           <th>Symbol</th><th>Price</th>
-          <th>V2 Chg</th><th>V2 Sig</th>
-          <th>V3 Chg</th><th>V3 Sig</th>
+          <th>Lite Chg</th><th>Lite Sig</th>
+          <th>Pro Chg</th><th>Pro Sig</th>
           <th>Consensus</th><th>Conf</th><th>SVR</th>
         </tr></thead>
         <tbody>${trs}</tbody>

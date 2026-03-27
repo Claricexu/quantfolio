@@ -1,7 +1,7 @@
 """
-Finance Dashboard API Server
+Quantfolio API Server
 ==============================
-FastAPI server that wraps finance_model_v2.py and serves real-time predictions.
+FastAPI server that wraps the Lite and Pro ML models for real-time predictions.
 
 Endpoints:
   GET  /api/predict/{symbol}   — single-ticker prediction with SVR
@@ -167,7 +167,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Finance Ensemble Predictor",
+    title="Quantfolio",
     version="2.0",
     lifespan=lifespan,
 )
@@ -188,8 +188,8 @@ async def api_predict(symbol: str, version: str = None, weight_rf: float = 0.8,
     """
     Full ensemble prediction for a single ticker.
     Query params:
-      ?version=v3              — v3 (stacking) or v2 (RF+XGB)
-      ?weight_rf=0.8&weight_xgb=0.2  — V2 model weights
+      ?version=v3              — Pro (stacking) or Lite (RF+XGB)
+      ?weight_rf=0.8&weight_xgb=0.2  — Lite model weights
       ?rolling_window=504             — training window (omit or 0 for all data)
     """
     symbol = symbol.upper().strip()
@@ -216,7 +216,7 @@ async def api_predict(symbol: str, version: str = None, weight_rf: float = 0.8,
 @app.get("/api/predict-compare/{symbol}")
 async def api_predict_compare(symbol: str):
     """
-    Run BOTH V2 and V3 models on a single ticker.
+    Run BOTH Lite and Pro models on a single ticker.
     Returns side-by-side predictions with consensus signal.
     """
     symbol = symbol.upper().strip()
