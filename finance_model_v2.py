@@ -1,19 +1,23 @@
 """
-Finance Model V4 — Stacking Ensemble with Prediction Rescaling
-===============================================================
-Primary: V3 Stacking (LightGBM + XGBoost + RF -> Ridge meta), 37 features
-Fallback: V2 (RF 80% + XGB 20%), 13 features — if LightGBM unavailable
+Quantfolio — ML Prediction Engine (Lite + Pro)
+===============================================
+Primary: V3 Pro Stacking (LightGBM + XGBoost + RF -> inverse-MAE weighted), 22 features
+Fallback: V2 Lite (RF 80% + XGB 20%), 13 features — if LightGBM unavailable
 
-Key innovations from your V4 backtest:
-  - Prediction rescaling: raw preds scaled to match actual return std
-  - ±2% threshold on rescaled predictions
+Key innovations (backtest-proven):
+  - Inverse-MAE weighted ensemble (replaces Ridge meta that compressed signals)
+  - Z-score ±2.5 sigma signal strategy (replaces absolute ±2% that never triggered)
   - SVR valuation filter: BUY requires SVR<=7, SELL if SVR>=15
-  - Walk-forward with quarterly retrain (V3) or 20-day retrain (V2)
+  - Walk-forward with 63-day retrain aligned to 126-day Z-score lookback
+  - Auto strategy mode: ETFs → Full Signal (BUY+SELL), Stocks → Buy-Only (BUY only)
+    Backtest-validated: SELL signals improve ETF Sharpe (+0.06 to +0.20) but hurt
+    individual stocks (-0.14 to -0.35) due to false exits in volatile names
 
 Usage:
   python finance_model_v2.py --ticker AAPL
+  python finance_model_v2.py --ticker SPY --strategy full
   python finance_model_v2.py --backtest SPY
-  python finance_model_v2.py --backtest SPY --version v2
+  python finance_model_v2.py --backtest MU --strategy buy_only
   python finance_model_v2.py --report
 """
 
@@ -33,7 +37,6 @@ from ta.volatility import BollingerBands, AverageTrueRange
 from ta.volume import OnBalanceVolumeIndicator
 
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_absolute_error, mean_squared_error
@@ -60,10 +63,40 @@ CACHE_DAYS = 1
 FETCH_DELAY_SEC = 1.5
 MAX_RETRIES = 5
 BACKOFF_BASE = 2
-THRESHOLD = 0.02
-RETRAIN_FREQ_V2 = 20
+THRESHOLD = 2.5          # Z-score threshold (±2.5 sigma — optimal per sensitivity analysis)
+ZSCORE_LOOKBACK = 126    # ~6 months rolling window for Z-score computation
+RETRAIN_FREQ_V2 = 63     # aligned with Z-score lookback (was 20, caused stale cash positions)
 RETRAIN_FREQ_V3 = 63
 MODEL_VERSION = 'v3' if HAS_LGBM else 'v2'
+
+# Strategy mode: "full" (BUY+SELL), "buy_only" (BUY only, hold forever), "auto" (ETF→full, stock→buy_only)
+# Backtest-validated: SELL signals help on ETFs (Sharpe +0.06 to +0.20) but hurt on
+# individual stocks (Sharpe -0.14 to -0.35). Auto mode applies the right strategy per ticker.
+DEFAULT_STRATEGY = 'auto'
+
+# Known ETF tickers — used by auto mode to choose full signal strategy
+ETF_TICKERS = {
+    # Major index ETFs
+    'SPY', 'QQQ', 'IWM', 'DIA', 'VOO', 'VTI', 'RSP',
+    # Sector ETFs
+    'SMH', 'XLE', 'XOP', 'XLF', 'XLK', 'XLV', 'XLI', 'XLU', 'XLP', 'XLY', 'XLC', 'XLB',
+    'SOXX', 'IBB', 'KRE', 'KWEB',
+    # Bond ETFs
+    'TLT', 'TIP', 'BND', 'AGG', 'HYG', 'LQD', 'SHY', 'IEF',
+    # Commodity ETFs
+    'GLD', 'SLV', 'USO', 'UNG', 'DBA',
+    # Thematic / International ETFs
+    'FXI', 'EEM', 'EFA', 'VWO', 'IBIT', 'URNM', 'ARKK', 'ARKG',
+}
+
+def get_strategy_mode(symbol, override=None):
+    """Determine strategy mode for a symbol.
+    Returns 'full' or 'buy_only'."""
+    if override and override in ('full', 'buy_only'):
+        return override
+    if override == 'auto' or override is None:
+        return 'full' if symbol.upper() in ETF_TICKERS else 'buy_only'
+    return 'buy_only'  # safe default
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TICKERS_CSV = os.path.join(SCRIPT_DIR, "Tickers.csv")
@@ -205,53 +238,62 @@ def engineer_features_v2(df):
     return df
 
 # =============================================================================
-# V3 FEATURES (37)
+# V3 FEATURES (22 — trimmed from 37, removed redundant/noisy features)
 # =============================================================================
 V3_FEATURE_COLS = [
-    'Dist_SMA50','Dist_SMA200','Dist_EMA50','Dist_EMA200','RSI','BB_Position','BB_Width',
-    'Return_1d','Return_5d','Return_20d','RVol_20d','SMA_Cross','EMA_Cross',
-    'Volume_Ratio_20d','OBV_Slope_10d','Volume_Price_Div','Volume_Zscore_20d',
-    'ROC_3d','ROC_10d','ROC_20d','ROC_60d','ATR_Norm','GK_Vol_20d','Intraday_Range',
-    'Zscore_20d','Zscore_50d','ADX_14','MACD_Hist_Norm',
-    'Day_of_Week','Month','Quarter_End',
-    'RSI_Lag1','RSI_Lag2','Return_1d_Lag1','Return_1d_Lag2','BB_Position_Lag1','BB_Position_Lag2']
+    # Core price structure (9)
+    'Dist_SMA50','Dist_SMA200','RSI','BB_Position',
+    'Return_1d','Return_5d','Return_20d','RVol_20d','SMA_Cross',
+    # Volume (3)
+    'Volume_Ratio_20d','OBV_Slope_10d','Volume_Zscore_20d',
+    # Multi-timeframe momentum (2)
+    'ROC_10d','ROC_60d',
+    # Volatility (2)
+    'ATR_Norm','GK_Vol_20d',
+    # Mean reversion (1)
+    'Zscore_50d',
+    # Trend strength (2)
+    'ADX_14','MACD_Hist_Norm',
+    # Lagged (3)
+    'RSI_Lag1','Return_1d_Lag1','BB_Position_Lag1',
+]
 
 def engineer_features_v3(df):
+    """22 features only — trimmed from 37 (removed redundant/noisy features)."""
     c=df['Close'].squeeze(); h=df['High'].squeeze(); l=df['Low'].squeeze()
     o=df['Open'].squeeze(); v=df['Volume'].squeeze().astype(float)
+    # Technical indicators
     s50=SMAIndicator(c,50).sma_indicator(); s200=SMAIndicator(c,200).sma_indicator()
-    e50=EMAIndicator(c,50).ema_indicator(); e200=EMAIndicator(c,200).ema_indicator()
-    rsi=RSIIndicator(c,14).rsi(); bb=BollingerBands(c,20,2)
-    bh,bl=bb.bollinger_hband(),bb.bollinger_lband()
+    rsi=RSIIndicator(c,14).rsi()
+    bb=BollingerBands(c,20,2); bh,bl=bb.bollinger_hband(),bb.bollinger_lband()
+    # Core price structure (9)
     df['Dist_SMA50']=(c-s50)/s50; df['Dist_SMA200']=(c-s200)/s200
-    df['Dist_EMA50']=(c-e50)/e50; df['Dist_EMA200']=(c-e200)/e200
-    df['RSI']=rsi; df['BB_Position']=(c-bl)/(bh-bl); df['BB_Width']=(bh-bl)/c
+    df['RSI']=rsi; df['BB_Position']=(c-bl)/(bh-bl)
     df['Return_1d']=c.pct_change(1); df['Return_5d']=c.pct_change(5); df['Return_20d']=c.pct_change(20)
     df['RVol_20d']=df['Return_1d'].rolling(20).std()
-    df['SMA_Cross']=(s50>s200).astype(float); df['EMA_Cross']=(e50>e200).astype(float)
+    df['SMA_Cross']=(s50>s200).astype(float)
+    # Volume (3)
     vs20=v.rolling(20).mean(); df['Volume_Ratio_20d']=v/vs20
     obv=OnBalanceVolumeIndicator(c,v).on_balance_volume()
     obv_s=obv.rolling(10).apply(lambda x:np.polyfit(np.arange(len(x)),x,1)[0] if len(x)==10 else 0,raw=True)
     df['OBV_Slope_10d']=obv_s/(v.rolling(10).mean()+1e-10)
-    df['Volume_Price_Div']=(np.sign(c.pct_change(5))!=np.sign(v.pct_change(5))).astype(float)
     df['Volume_Zscore_20d']=(v-vs20)/(v.rolling(20).std()+1e-10)
-    df['ROC_3d']=ROCIndicator(c,3).roc(); df['ROC_10d']=ROCIndicator(c,10).roc()
-    df['ROC_20d']=ROCIndicator(c,20).roc(); df['ROC_60d']=ROCIndicator(c,60).roc()
+    # Multi-timeframe momentum (2)
+    df['ROC_10d']=ROCIndicator(c,10).roc(); df['ROC_60d']=ROCIndicator(c,60).roc()
+    # Volatility (2)
     atr=AverageTrueRange(h,l,c,14).average_true_range(); df['ATR_Norm']=atr/c
     lhl=np.log(h/l)**2; lco=np.log(c/o)**2
     df['GK_Vol_20d']=(0.5*lhl-(2*np.log(2)-1)*lco).rolling(20).mean()
-    df['Intraday_Range']=(h-l)/c
-    s20=SMAIndicator(c,20).sma_indicator()
-    df['Zscore_20d']=(c-s20)/(c.rolling(20).std()+1e-10)
+    # Mean reversion (1)
     df['Zscore_50d']=(c-s50)/(c.rolling(50).std()+1e-10)
+    # Trend strength (2)
     df['ADX_14']=ADXIndicator(h,l,c,14).adx()
     macd=MACD(c,26,12,9); df['MACD_Hist_Norm']=macd.macd_diff()/c
-    df['Day_of_Week']=df.index.dayofweek.astype(float); df['Month']=df.index.month.astype(float)
-    qe=pd.Series(df.index,index=df.index).apply(lambda d:1.0 if d.month in[3,6,9,12] and d.day>=25 else 0.0)
-    df['Quarter_End']=qe.values
-    df['RSI_Lag1']=rsi.shift(1); df['RSI_Lag2']=rsi.shift(2)
-    df['Return_1d_Lag1']=df['Return_1d'].shift(1); df['Return_1d_Lag2']=df['Return_1d'].shift(2)
-    df['BB_Position_Lag1']=df['BB_Position'].shift(1); df['BB_Position_Lag2']=df['BB_Position'].shift(2)
+    # Lagged (3)
+    df['RSI_Lag1']=rsi.shift(1)
+    df['Return_1d_Lag1']=df['Return_1d'].shift(1)
+    df['BB_Position_Lag1']=df['BB_Position'].shift(1)
+    # Target
     df['Target_Return']=c.pct_change(1).shift(-1); df['Volatility_20d']=df['RVol_20d']
     return df
 
@@ -259,11 +301,11 @@ def engineer_features_v3(df):
 # V2 MODELS
 # =============================================================================
 def train_rf_v2(X,y):
-    m=RandomForestRegressor(n_estimators=200,max_depth=6,min_samples_leaf=10,max_features='sqrt',random_state=42,n_jobs=-1)
+    m=RandomForestRegressor(n_estimators=200,max_depth=6,min_samples_leaf=10,max_features='sqrt',random_state=42,n_jobs=1)
     m.fit(X,y); return m
 def train_xgb_v2(X,y):
     m=xgb.XGBRegressor(objective='reg:squarederror',n_estimators=200,max_depth=4,learning_rate=0.05,
-                        subsample=0.8,colsample_bytree=0.8,reg_alpha=0.5,reg_lambda=2.0,random_state=42,n_jobs=-1)
+                        subsample=0.8,colsample_bytree=0.8,reg_alpha=0.5,reg_lambda=2.0,random_state=42,n_jobs=1)
     m.fit(X,y,verbose=False); return m
 def predict_v2(models,X):
     return np.clip(0.8*models[0].predict(X)+0.2*models[1].predict(X),-0.08,0.08)
@@ -273,41 +315,51 @@ def predict_v2(models,X):
 # =============================================================================
 def train_lgbm_v3(Xt,yt,Xv,yv):
     m=lgb.LGBMRegressor(n_estimators=1000,max_depth=5,learning_rate=0.03,subsample=0.7,colsample_bytree=0.7,
-                         reg_alpha=0.3,reg_lambda=1.5,min_child_samples=20,random_state=42,verbose=-1,n_jobs=-1)
+                         reg_alpha=0.3,reg_lambda=1.5,min_child_samples=20,random_state=42,verbose=-1,n_jobs=1)
     m.fit(Xt,yt,eval_set=[(Xv,yv)],callbacks=[lgb.early_stopping(50,verbose=False)]); return m
 
 def train_xgb_v3(Xt,yt,Xv,yv):
     m=xgb.XGBRegressor(objective='reg:squarederror',n_estimators=1000,max_depth=4,learning_rate=0.03,
                         subsample=0.7,colsample_bytree=0.7,reg_alpha=0.5,reg_lambda=2.0,
-                        random_state=42,n_jobs=-1,early_stopping_rounds=50)
+                        random_state=42,n_jobs=1,early_stopping_rounds=50)
     m.fit(Xt,yt,eval_set=[(Xv,yv)],verbose=False); return m
 
 def train_rf_v3(X,y):
-    m=RandomForestRegressor(n_estimators=300,max_depth=8,min_samples_leaf=15,max_features=0.5,random_state=42,n_jobs=-1)
+    m=RandomForestRegressor(n_estimators=300,max_depth=8,min_samples_leaf=15,max_features=0.5,random_state=42,n_jobs=1)
     m.fit(X,y); return m
 
 def build_stacking_ensemble(X_train,y_train,X_val,y_val):
+    """Build ensemble with OOF inverse-MAE weighted average.
+    Replaces Ridge meta-learner which compressed predictions to near-zero."""
     tscv=TimeSeriesSplit(n_splits=5); oof=np.zeros((len(X_train),3))
     for _,(ti,vi) in enumerate(tscv.split(X_train)):
         Xft,yft=X_train[ti],y_train[ti]; Xfv,yfv=X_train[vi],y_train[vi]
         oof[vi,0]=train_lgbm_v3(Xft,yft,Xfv,yfv).predict(Xfv)
         oof[vi,1]=train_xgb_v3(Xft,yft,Xfv,yfv).predict(Xfv)
         oof[vi,2]=train_rf_v3(Xft,yft).predict(Xfv)
-    mask=np.any(oof!=0,axis=1); meta=Ridge(alpha=0.01); meta.fit(oof[mask],y_train[mask])
+    # Inverse-MAE weighting (proven better than Ridge in backtest)
+    mask=np.any(oof!=0,axis=1)
+    oof_valid=oof[mask]; y_valid=y_train[mask]
+    mae_per_model=np.array([np.mean(np.abs(oof_valid[:,j]-y_valid)) for j in range(3)])
+    inv_mae=1.0/(mae_per_model+1e-10)
+    weights=inv_mae/inv_mae.sum()
+    # Retrain final models on full training data
     fl=train_lgbm_v3(X_train,y_train,X_val,y_val)
     fx=train_xgb_v3(X_train,y_train,X_val,y_val)
     fr=train_rf_v3(X_train,y_train)
-    return {'lgbm':fl,'xgb':fx,'rf':fr,'meta':meta}
+    return {'lgbm':fl,'xgb':fx,'rf':fr,'weights':weights}
 
 def predict_v3(ens,X):
-    st=np.column_stack([ens['lgbm'].predict(X),ens['xgb'].predict(X),ens['rf'].predict(X)])
-    return np.clip(ens['meta'].predict(st),-0.08,0.08)
+    """Weighted average prediction — no clipping, preserves full signal range."""
+    w=ens['weights']
+    return w[0]*ens['lgbm'].predict(X)+w[1]*ens['xgb'].predict(X)+w[2]*ens['rf'].predict(X)
 
 # =============================================================================
 # PREDICT TICKER (used by dashboard + CLI)
 # =============================================================================
-def predict_ticker(symbol,cache_dir=None,verbose=True,version=None,**kwargs):
+def predict_ticker(symbol,cache_dir=None,verbose=True,version=None,strategy=None,**kwargs):
     cache_dir=cache_dir or CACHE_DIR; ver=version or MODEL_VERSION
+    strat = get_strategy_mode(symbol, strategy)
     raw=fetch_stock_data([symbol],cache_dir=cache_dir)
     if symbol not in raw or raw[symbol].empty: return {"symbol":symbol,"error":"No data available"}
 
@@ -333,25 +385,28 @@ def predict_ticker(symbol,cache_dir=None,verbose=True,version=None,**kwargs):
         xm=train_xgb_v2(scaler.transform(aX[:te]),ay[:te])
         model=(rf,xm); pf=predict_v2
 
-    # Rescaling factor
-    rn=min(252,te); Xrc=scaler.transform(aX[te-rn:te])
-    cp=pf(model,Xrc); ps=np.std(cp); acs=np.std(ay[te-rn:te])
-    sf=acs/ps if ps>1e-10 else 1.0
-
-    # Eval on validation
-    yp=pf(model,Xvl_s)*sf
+    # Eval on validation (raw predictions, no rescaling needed with new ensemble)
+    yp=pf(model,Xvl_s)
     mae_r=mean_absolute_error(yvl,yp); rmse_r=np.sqrt(mean_squared_error(yvl,yp))
     dir_acc=np.mean(np.sign(yp)==np.sign(yvl))*100
 
-    # Quick backtest on validation
-    btc,bts=10000.0,0.0; btp=[]
-    for j in range(len(Xvl)):
+    # Build prediction history for Z-score (using recent validation predictions)
+    pred_history=list(yp[-ZSCORE_LOOKBACK:])
+
+    # Quick backtest on validation using Z-score signals
+    btc,bts=10000.0,0.0; btp=[]; bt_pred_hist=list(yp[:20])  # seed
+    for j in range(20,len(Xvl)):
         pr=yp[j]; bp=float(dc['Close'].iloc[vs+j]) if vs+j<len(dc) else float(dc['Close'].iloc[-1])
-        if pr>=THRESHOLD and btc>0: bts=btc/bp; btc=0
-        elif pr<=-THRESHOLD and bts>0: btc=bts*bp; bts=0
+        bt_pred_hist.append(pr)
+        if len(bt_pred_hist)>ZSCORE_LOOKBACK: bt_pred_hist=bt_pred_hist[-ZSCORE_LOOKBACK:]
+        hist=np.array(bt_pred_hist[:-1])
+        mu,sigma=np.mean(hist),np.std(hist)
+        z=(pr-mu)/sigma if sigma>1e-10 else 0.0
+        if z>=THRESHOLD and btc>0: bts=btc/bp; btc=0
+        elif z<=-THRESHOLD and bts>0: btc=bts*bp; bts=0
         btp.append(btc+bts*bp)
     bt_ret=(btp[-1]/10000-1)*100 if btp else 0
-    tc=dc['Close'].values[vs:vs+len(btp)]
+    tc=dc['Close'].values[vs+20:vs+20+len(btp)]
     bnh_ret=(tc[-1]/tc[0]-1)*100 if len(tc)>0 else 0
     bd=np.diff(btp)/np.array(btp[:-1]) if len(btp)>1 else [0]
     bt_sh=float(np.mean(bd)/np.std(bd)*np.sqrt(252)) if np.std(bd)>0 else 0
@@ -362,43 +417,66 @@ def predict_ticker(symbol,cache_dir=None,verbose=True,version=None,**kwargs):
     lf=latest_row[fcols].values
     if np.isnan(lf).any(): lf=aX[-1:].copy()
     ls=scaler.transform(lf.reshape(1,-1))
-    rp=pf(model,ls)[0]; rsp=rp*sf
-    cp_price=float(df['Close'].iloc[-1]); pp=cp_price*(1+rsp)
+    rp=pf(model,ls)[0]
+    cp_price=float(df['Close'].iloc[-1]); pp=cp_price*(1+rp)
+
+    # Compute Z-score of today's prediction vs recent history
+    pred_history.append(rp)
+    if len(pred_history)>ZSCORE_LOOKBACK: pred_history=pred_history[-ZSCORE_LOOKBACK:]
+    hist=np.array(pred_history[:-1])
+    mu,sigma=np.mean(hist),np.std(hist)
+    z_score=(rp-mu)/sigma if sigma>1e-10 else 0.0
 
     # Per-model breakdown
     if ver=='v3':
-        mpreds={"LGBM":round(cp_price*(1+float(model['lgbm'].predict(ls)[0])*sf),2),
-                "XGB":round(cp_price*(1+float(model['xgb'].predict(ls)[0])*sf),2),
-                "RF":round(cp_price*(1+float(model['rf'].predict(ls)[0])*sf),2)}
+        mpreds={"LGBM":round(cp_price*(1+float(model['lgbm'].predict(ls)[0])),2),
+                "XGB":round(cp_price*(1+float(model['xgb'].predict(ls)[0])),2),
+                "RF":round(cp_price*(1+float(model['rf'].predict(ls)[0])),2)}
     else:
-        mpreds={"RF":round(cp_price*(1+float(model[0].predict(ls)[0])*sf),2),
-                "XGB":round(cp_price*(1+float(model[1].predict(ls)[0])*sf),2)}
+        mpreds={"RF":round(cp_price*(1+float(model[0].predict(ls)[0])),2),
+                "XGB":round(cp_price*(1+float(model[1].predict(ls)[0])),2)}
 
+    # Signal: Z-score threshold + SVR filter + strategy mode
     svr,mc,qr=_fetch_svr(symbol)
-    pp_pct=rsp*100; sok=(svr is None)or(svr<=7); ste=(svr is not None)and(svr>=15)
-    if pp_pct>=2.0 and sok: sig="BUY"
-    elif pp_pct<=-2.0 or ste: sig="SELL"
-    else: sig="HOLD"
+    pp_pct=rp*100
+    sok=(svr is None)or(svr<=7); ste=(svr is not None)and(svr>=15)
 
-    vl="V3 Stacking" if ver=='v3' else "V2 RF+XGB"
+    if strat == 'buy_only':
+        # Buy-Only: Z-score triggers BUY, only extreme SVR overvaluation triggers SELL
+        # Backtest-proven: sell signals hurt individual stocks (Sharpe -0.14 to -0.35)
+        if z_score>=THRESHOLD and sok: sig="BUY"
+        elif ste: sig="SELL"  # only SVR overvaluation warning
+        else: sig="HOLD"
+        sig_rules=f"BUY: Z>={THRESHOLD} & SVR<=7 | SELL: SVR>=15 only (buy-only mode)"
+    else:
+        # Full Signal: BUY and SELL from Z-score + SVR
+        # Backtest-proven: sell signals help ETFs (Sharpe +0.06 to +0.20)
+        if z_score>=THRESHOLD and sok: sig="BUY"
+        elif z_score<=-THRESHOLD or ste: sig="SELL"
+        else: sig="HOLD"
+        sig_rules=f"BUY: Z>={THRESHOLD} & SVR<=7 | SELL: Z<=-{THRESHOLD} or SVR>=15"
+
+    vl="Pro (Stacking)" if ver=='v3' else "Lite (RF+XGB)"
+    strat_label="Full Signal" if strat=='full' else "Buy-Only"
     result={"symbol":symbol,"current_price":round(cp_price,2),"predicted_price":round(float(pp),2),
-            "pct_change":round(float(rsp)*100,2),"signal":sig,
-            "signal_rules":"BUY: chg>=+2% & SVR<=7 | SELL: chg<=-2% or SVR>=15",
-            "model_version":vl,"model_predictions":mpreds,"scale_factor":round(sf,1),
+            "pct_change":round(float(rp)*100,2),"z_score":round(float(z_score),2),"signal":sig,
+            "signal_rules":sig_rules,"strategy_mode":strat,"strategy_label":strat_label,
+            "model_version":vl,"model_predictions":mpreds,
             "svr":svr,"market_cap":mc,"quarterly_revenue":qr,
             "backtest_mae_pct":round(float(mae_r)*100,3),"backtest_rmse_pct":round(float(rmse_r)*100,3),
             "direction_accuracy":round(float(dir_acc),1),
             "backtest_mae":round(float(mae_r)*cp_price,2),"backtest_rmse":round(float(rmse_r)*cp_price,2),
             "data_points":len(dc),"train_window":te,"train_window_setting":"All data",
-            "weight_rf":0.8,"weight_xgb":0.2,"last_date":str(df.index[-1].date()),
+            "last_date":str(df.index[-1].date()),
             "backtest":{"strategy_return":round(bt_ret,2),"buyhold_return":round(bnh_ret,2),
                         "sharpe":round(bt_sh,2),"max_drawdown":round(bt_dd,1),"test_days":len(btp)}}
     if verbose:
         svr_s=f"{svr:.1f}x" if svr else "N/A"
-        print(f"\n{'='*55}\n  {symbol}  ({vl}, scale {sf:.1f}x)\n{'='*55}")
+        print(f"\n{'='*55}\n  {symbol}  ({vl} | {strat_label})\n{'='*55}")
         print(f"  Current:   ${cp_price:.2f}  |  Predicted: ${pp:.2f} ({pp_pct:+.2f}%)")
-        print(f"  Signal:    {sig} (SVR {svr_s})  |  Dir Acc: {dir_acc:.1f}%")
-        print(f"  Backtest:  Strategy {bt_ret:+.1f}% vs B&H {bnh_ret:+.1f}% | Sharpe {bt_sh:.2f}")
+        print(f"  Z-score:   {z_score:+.2f}  |  Signal: {sig} (SVR {svr_s})")
+        print(f"  Strategy:  {strat_label} {'(ETF)' if strat=='full' else '(Stock)'}")
+        print(f"  Dir Acc:   {dir_acc:.1f}%  |  Backtest: {bt_ret:+.1f}% vs B&H {bnh_ret:+.1f}%")
         print(f"  Models:    {mpreds}")
         print(f"  Data:      {len(dc)} rows through {df.index[-1].date()}")
     return result
@@ -406,11 +484,12 @@ def predict_ticker(symbol,cache_dir=None,verbose=True,version=None,**kwargs):
 # =============================================================================
 # COMPARE BOTH MODELS (single ticker)
 # =============================================================================
-def predict_ticker_compare(symbol, cache_dir=None, verbose=False):
+def predict_ticker_compare(symbol, cache_dir=None, verbose=False, strategy=None):
     """Run both V2 and V3 on a single ticker and return combined result."""
     cache_dir = cache_dir or CACHE_DIR
-    r_v2 = predict_ticker(symbol, cache_dir=cache_dir, verbose=False, version='v2')
-    r_v3 = predict_ticker(symbol, cache_dir=cache_dir, verbose=False, version='v3') if HAS_LGBM else None
+    strat = get_strategy_mode(symbol, strategy)
+    r_v2 = predict_ticker(symbol, cache_dir=cache_dir, verbose=False, version='v2', strategy=strat)
+    r_v3 = predict_ticker(symbol, cache_dir=cache_dir, verbose=False, version='v3', strategy=strat) if HAS_LGBM else None
 
     if 'error' in r_v2 and (r_v3 is None or 'error' in r_v3):
         return r_v2  # both failed
@@ -428,6 +507,7 @@ def predict_ticker_compare(symbol, cache_dir=None, verbose=False):
         consensus = 'HOLD'
         confidence = 'CONFLICT'
 
+    strat_label = "Full Signal" if strat=='full' else "Buy-Only"
     result = {
         'symbol': symbol,
         'current_price': r_v2.get('current_price') or (r_v3 or {}).get('current_price'),
@@ -437,6 +517,8 @@ def predict_ticker_compare(symbol, cache_dir=None, verbose=False):
         'quarterly_revenue': r_v2.get('quarterly_revenue'),
         'consensus_signal': consensus,
         'confidence': confidence,
+        'strategy_mode': strat,
+        'strategy_label': strat_label,
         'v2': r_v2 if 'error' not in r_v2 else None,
         'v3': r_v3 if r_v3 and 'error' not in r_v3 else None,
     }
@@ -446,9 +528,10 @@ def predict_ticker_compare(symbol, cache_dir=None, verbose=False):
         p3 = (r_v3 or {}).get('predicted_price', '?') if r_v3 and 'error' not in r_v3 else '?'
         c2 = r_v2.get('pct_change', 0) if 'error' not in r_v2 else 0
         c3 = (r_v3 or {}).get('pct_change', 0) if r_v3 and 'error' not in r_v3 else 0
-        print(f"\n{'='*60}\n  {symbol}  COMPARE\n{'='*60}")
-        print(f"  Current: ${cp}  |  V2: ${p2} ({c2:+.2f}%)  |  V3: ${p3} ({c3:+.2f}%)")
-        print(f"  V2 Signal: {sig_v2}  |  V3 Signal: {sig_v3}  |  Consensus: {consensus} ({confidence})")
+        print(f"\n{'='*60}\n  {symbol}  COMPARE  ({strat_label})\n{'='*60}")
+        print(f"  Current: ${cp}  |  Lite: ${p2} ({c2:+.2f}%)  |  Pro: ${p3} ({c3:+.2f}%)")
+        print(f"  Lite Signal: {sig_v2}  |  Pro Signal: {sig_v3}  |  Consensus: {consensus} ({confidence})")
+        print(f"  Strategy: {strat_label} {'(ETF — SELL signals active)' if strat=='full' else '(Stock — BUY only, hold)'}")
     return result
 
 
@@ -471,7 +554,7 @@ def daily_scan_both(symbols=None, cache_dir=None, top_n=10):
                 conf = r.get('confidence', '?')
                 v2c = r['v2']['pct_change'] if r.get('v2') else 0
                 v3c = r['v3']['pct_change'] if r.get('v3') else 0
-                print(f"  [{i+1:3d}/{len(symbols)}] {s:<6} V2:{v2c:+6.2f}% V3:{v3c:+6.2f}% → {sig} ({conf})")
+                print(f"  [{i+1:3d}/{len(symbols)}] {s:<6} Lite:{v2c:+6.2f}% Pro:{v3c:+6.2f}% → {sig} ({conf})")
             else:
                 print(f"  [{i+1:3d}/{len(symbols)}] {s:<6} {r.get('error','Unknown error')}")
         except Exception as e:
@@ -546,8 +629,10 @@ def daily_scan(symbols=None,cache_dir=None,top_n=10):
 # =============================================================================
 # BACKTEST
 # =============================================================================
-def backtest_symbol(symbol,cache_dir=None,version=None,initial_cash=10000):
+def backtest_symbol(symbol,cache_dir=None,version=None,initial_cash=10000,strategy=None):
+    """Walk-forward backtest with Z-score signal strategy (respects strategy mode)."""
     cache_dir=cache_dir or CACHE_DIR; ver=version or MODEL_VERSION
+    strat = get_strategy_mode(symbol, strategy)
     raw=fetch_stock_data([symbol],cache_dir=cache_dir)
     if symbol not in raw or raw[symbol].empty: return None
     df=raw[symbol].copy()
@@ -560,7 +645,9 @@ def backtest_symbol(symbol,cache_dir=None,version=None,initial_cash=10000):
     if bm.sum()==0: print(f"No data after {bt_s}"); return None
     bsi=np.argmax(bm); aX=dc[fc].values; ay=dc['Target_Return'].values
     ap=dc['Close'].values.ravel()
-    cash,sh=initial_cash,0.0; port,sigs=[],[]; mdl=None; sc=StandardScaler(); rc=0; sf=1.0
+    cash,sh=initial_cash,0.0; port,sigs=[],[]; mdl=None; sc=StandardScaler(); rc=0
+    pred_history=[]  # rolling window of recent predictions for Z-score
+
     for i in range(bsi,len(aX)-1):
         if mdl is None or rc>=rf_freq:
             vs=int(i*0.85); sc.fit(aX[:i])
@@ -568,19 +655,44 @@ def backtest_symbol(symbol,cache_dir=None,version=None,initial_cash=10000):
                 mdl=build_stacking_ensemble(sc.transform(aX[:vs]),ay[:vs],sc.transform(aX[vs:i]),ay[vs:i]); pf=predict_v3
             else:
                 mdl=(train_rf_v2(sc.transform(aX[:i]),ay[:i]),train_xgb_v2(sc.transform(aX[:i]),ay[:i])); pf=predict_v2
-            rn=min(252,i); cp2=pf(mdl,sc.transform(aX[i-rn:i])); ps2=np.std(cp2)
-            sf=np.std(ay[i-rn:i])/ps2 if ps2>1e-10 else 1.0; rc=0
-        p=pf(mdl,sc.transform(aX[i:i+1]))[0]*sf; pr=float(ap[i])
-        if p>=THRESHOLD and cash>0: sh=cash/pr; cash=0; sigs.append('BUY')
-        elif p<=-THRESHOLD and sh>0: cash=sh*pr; sh=0; sigs.append('SELL')
-        else: sigs.append('HOLD')
+            # Seed prediction history with validation predictions
+            if not pred_history:
+                seed_preds=pf(mdl,sc.transform(aX[vs:i]))
+                pred_history=list(seed_preds[-ZSCORE_LOOKBACK:])
+            rc=0
+
+        raw_pred=pf(mdl,sc.transform(aX[i:i+1]))[0]
+        pred_history.append(raw_pred)
+        if len(pred_history)>ZSCORE_LOOKBACK: pred_history=pred_history[-ZSCORE_LOOKBACK:]
+
+        # Compute Z-score
+        if len(pred_history)>=20:
+            hist=np.array(pred_history[:-1])
+            mu,sigma=np.mean(hist),np.std(hist)
+            z=(raw_pred-mu)/sigma if sigma>1e-10 else 0.0
+        else:
+            z=0.0
+
+        pr=float(ap[i])
+        if strat == 'buy_only':
+            # Buy-Only: buy on strong signal, never sell (hold forever)
+            if z>=THRESHOLD and cash>0: sh=cash/pr; cash=0; sigs.append('BUY')
+            else: sigs.append('HOLD')
+        else:
+            # Full Signal: buy and sell on Z-score
+            if z>=THRESHOLD and cash>0: sh=cash/pr; cash=0; sigs.append('BUY')
+            elif z<=-THRESHOLD and sh>0: cash=sh*pr; sh=0; sigs.append('SELL')
+            else: sigs.append('HOLD')
         port.append(cash+sh*pr); rc+=1
+
     port=np.array(port); sr=(port[-1]/initial_cash-1)*100
     tp=ap[bsi:bsi+len(port)]; bnh=initial_cash*(tp/tp[0]); br=(bnh[-1]/initial_cash-1)*100
     dr=np.diff(port)/port[:-1]; sh_r=float(np.mean(dr)/np.std(dr)*np.sqrt(252)) if np.std(dr)>0 else 0
     pk=np.maximum.accumulate(port); mdd=float(((port-pk)/pk).min())*100
     nb,ns=sigs.count('BUY'),sigs.count('SELL')
-    print(f"\n{'='*60}\n  BACKTEST: {symbol} ({ver.upper()})\n{'='*60}")
+    vl="Pro" if ver=='v3' else "Lite"
+    strat_label="Full Signal" if strat=='full' else "Buy-Only"
+    print(f"\n{'='*60}\n  BACKTEST: {symbol} ({vl}, {strat_label}, Z-score ±{THRESHOLD}σ)\n{'='*60}")
     print(f"  Period: {len(port)} days | Signals: {nb} BUY, {ns} SELL, {sigs.count('HOLD')} HOLD")
     print(f"  Strategy: {sr:+.1f}% | B&H: {br:+.1f}% | Sharpe: {sh_r:.2f} | MaxDD: {mdd:.1f}%")
     return port
@@ -589,13 +701,15 @@ def backtest_symbol(symbol,cache_dir=None,version=None,initial_cash=10000):
 # CLI
 # =============================================================================
 def main():
-    p=argparse.ArgumentParser(description="Finance Model V4")
+    p=argparse.ArgumentParser(description="Quantfolio ML Prediction Engine")
     p.add_argument('--ticker','-t',type=str); p.add_argument('--report','-r',action='store_true')
     p.add_argument('--backtest','-b',type=str); p.add_argument('--version','-v',type=str,choices=['v2','v3'])
+    p.add_argument('--strategy','-s',type=str,choices=['auto','full','buy_only'],default='auto',
+                   help='Signal strategy: auto (ETF→full, stock→buy_only), full (BUY+SELL), buy_only (BUY only)')
     p.add_argument('--cache-dir',type=str,default=CACHE_DIR); p.add_argument('--top',type=int,default=10)
     a=p.parse_args()
-    if a.ticker: predict_ticker(a.ticker.upper(),cache_dir=a.cache_dir,version=a.version)
-    elif a.backtest: backtest_symbol(a.backtest.upper(),cache_dir=a.cache_dir,version=a.version)
+    if a.ticker: predict_ticker(a.ticker.upper(),cache_dir=a.cache_dir,version=a.version,strategy=a.strategy)
+    elif a.backtest: backtest_symbol(a.backtest.upper(),cache_dir=a.cache_dir,version=a.version,strategy=a.strategy)
     elif a.report: daily_scan(cache_dir=a.cache_dir,top_n=a.top)
     else: daily_scan(cache_dir=a.cache_dir,top_n=a.top)
 

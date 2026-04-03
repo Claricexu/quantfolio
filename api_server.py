@@ -36,8 +36,10 @@ from finance_model_v2 import (
     daily_scan,
     daily_scan_both,
     get_all_symbols,
+    get_strategy_mode,
     SYMBOL_UNIVERSE,
     CACHE_DIR,
+    ETF_TICKERS,
     _ensure_cache_dir,
 )
 
@@ -183,12 +185,14 @@ app.add_middleware(
 # ─── API Routes ───
 
 @app.get("/api/predict/{symbol}")
-async def api_predict(symbol: str, version: str = None, weight_rf: float = 0.8,
-                      weight_xgb: float = 0.2, rolling_window: int = None):
+async def api_predict(symbol: str, version: str = None, strategy: str = None,
+                      weight_rf: float = 0.8, weight_xgb: float = 0.2,
+                      rolling_window: int = None):
     """
     Full ensemble prediction for a single ticker.
     Query params:
       ?version=v3              — Pro (stacking) or Lite (RF+XGB)
+      ?strategy=auto           — auto (ETF→full, stock→buy_only), full, buy_only
       ?weight_rf=0.8&weight_xgb=0.2  — Lite model weights
       ?rolling_window=504             — training window (omit or 0 for all data)
     """
@@ -200,11 +204,13 @@ async def api_predict(symbol: str, version: str = None, weight_rf: float = 0.8,
     if total_w > 0:
         weight_rf /= total_w
         weight_xgb /= total_w
-    # Validate version
+    # Validate version and strategy
     ver = version if version in ('v2', 'v3') else None
+    strat = strategy if strategy in ('auto', 'full', 'buy_only') else 'auto'
     try:
         result = predict_ticker(symbol, cache_dir=CACHE_DIR, verbose=False,
-                                version=ver, weight_rf=weight_rf, weight_xgb=weight_xgb,
+                                version=ver, strategy=strat,
+                                weight_rf=weight_rf, weight_xgb=weight_xgb,
                                 rolling_window=rw)
     except Exception as exc:
         raise HTTPException(500, f"Prediction failed: {exc}")
@@ -214,16 +220,19 @@ async def api_predict(symbol: str, version: str = None, weight_rf: float = 0.8,
 
 
 @app.get("/api/predict-compare/{symbol}")
-async def api_predict_compare(symbol: str):
+async def api_predict_compare(symbol: str, strategy: str = None):
     """
     Run BOTH Lite and Pro models on a single ticker.
     Returns side-by-side predictions with consensus signal.
+    Query params:
+      ?strategy=auto  — auto (ETF→full, stock→buy_only), full, buy_only
     """
     symbol = symbol.upper().strip()
     if not symbol.isalnum() or len(symbol) > 6:
         raise HTTPException(400, "Invalid ticker symbol")
+    strat = strategy if strategy in ('auto', 'full', 'buy_only') else 'auto'
     try:
-        result = predict_ticker_compare(symbol, cache_dir=CACHE_DIR, verbose=False)
+        result = predict_ticker_compare(symbol, cache_dir=CACHE_DIR, verbose=False, strategy=strat)
     except Exception as exc:
         raise HTTPException(500, f"Comparison failed: {exc}")
     if "error" in result:
@@ -358,11 +367,21 @@ async def api_movers(refresh: bool = False, version: str = None):
 
 @app.get("/api/symbols")
 async def api_symbols():
-    """Return the full symbol universe."""
+    """Return the full symbol universe with ETF classification."""
+    all_syms = get_all_symbols()
     return JSONResponse({
         "categories": SYMBOL_UNIVERSE,
-        "all": get_all_symbols(),
-        "count": len(get_all_symbols()),
+        "all": all_syms,
+        "count": len(all_syms),
+        "etf_tickers": sorted(ETF_TICKERS),
+        "strategy_info": {
+            "default": "auto",
+            "modes": {
+                "auto": "ETF -> Full Signal (BUY+SELL), Stock -> Buy-Only (BUY only)",
+                "full": "Full Signal: BUY and SELL on Z-score (best for ETFs)",
+                "buy_only": "Buy-Only: BUY on Z-score, hold forever (best for stocks)",
+            },
+        },
     })
 
 

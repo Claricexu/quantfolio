@@ -124,8 +124,9 @@
   thead tr { background:var(--bg-card); }
   th { padding:10px 14px; text-align:left; color:var(--text-faint); font-weight:600; font-size:10px;
     letter-spacing:1px; text-transform:uppercase; border-bottom:1px solid var(--border); }
-  th.sortable { cursor:pointer; user-select:none; }
+  th.sortable { cursor:pointer; user-select:none; transition:color 0.15s; white-space:nowrap; }
   th.sortable:hover { color:var(--blue-light); }
+  .sort-arrow { font-size:9px; margin-left:2px; transition:opacity 0.15s; }
   tbody tr { transition: background 0.15s; }
   tbody tr:nth-child(even) { background: var(--bg-row-even); }
   tbody tr:nth-child(odd)  { background: var(--bg-row-odd); }
@@ -232,26 +233,13 @@
         </div>
       </div>
       <div style="width:1px;height:20px;background:var(--border)"></div>
-      <div id="v2Controls" style="display:none;align-items:center;gap:8px">
-        <label style="font-size:11px;color:var(--text-dim);letter-spacing:0.5px;white-space:nowrap">RF</label>
-        <input type="range" id="rfWeight" min="0" max="100" value="80" style="width:60px" oninput="document.getElementById('rfLabel').textContent=this.value+'%'; document.getElementById('xgbLabel').textContent=(100-this.value)+'%'">
-        <span id="rfLabel" style="font-size:11px;color:var(--text-muted);font-family:var(--mono);min-width:28px">80%</span>
-        <label style="font-size:11px;color:var(--text-dim);margin-left:4px">XGB</label>
-        <span id="xgbLabel" style="font-size:11px;color:var(--text-muted);font-family:var(--mono);min-width:28px">20%</span>
-        <div style="width:1px;height:20px;background:var(--border);margin:0 4px"></div>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px">
-        <label style="font-size:11px;color:var(--text-dim);letter-spacing:0.5px;white-space:nowrap">Train Window</label>
-        <select id="rollingWindow" style="padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-base);color:var(--text-secondary);font-size:12px;font-family:var(--mono)">
-          <option value="0" selected>All data</option>
-          <option value="504">2 years</option>
-          <option value="1260">5 years</option>
-          <option value="756">3 years</option>
-          <option value="252">1 year</option>
-        </select>
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="font-size:11px;color:var(--text-dim);letter-spacing:0.5px">Train:</span>
+        <span style="font-size:11px;color:var(--text-muted);font-family:var(--mono)">2010 &#8594; present (expanding window)</span>
+        <span title="Trains on all data from 2010-01-01 to present. Z-score (126-day lookback) handles recency. Retrains every 63 trading days." style="cursor:help;font-size:11px;color:var(--text-faint);border:1px solid var(--border);border-radius:50%;width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center">?</span>
       </div>
     </div>
-    <p class="search-hint" id="modelHint">Pro: Stacking Ensemble (LightGBM + XGBoost + RF &#8594; Ridge meta) | 37 features | prediction rescaling | &#177;2% threshold</p>
+    <p class="search-hint" id="modelHint">Pro: Stacking Ensemble (LightGBM + XGBoost + RF &#8594; inverse-MAE weighted) | 22 features | Z-score &#177;2.5&#963; | Auto: ETF&#8594;Full Signal, Stock&#8594;Buy-Only</p>
 
     <div id="predResult"></div>
 
@@ -280,7 +268,7 @@
   <div class="footer">
     <p><strong>Disclaimer:</strong> For educational and research purposes only.
     Predictions are ML model outputs - not investment advice. Past performance does not equal future results.</p>
-    <p>Pro: Stacking Ensemble (LightGBM + XGBoost + RF) | Lite: RF + XGBoost | 37 / 13 Features | Prediction Rescaling</p>
+    <p>Pro: Stacking Ensemble (22 features, inverse-MAE weighted) | Lite: RF + XGBoost (13 features) | Z-score &#177;2.5&#963; signals | Auto strategy: ETFs &#8594; Full Signal, Stocks &#8594; Buy-Only</p>
   </div>
 </div>
 
@@ -381,10 +369,9 @@ function setModel(ver) {
     b.style.background = isActive ? 'var(--blue)' : 'var(--bg-base)';
     b.style.color = isActive ? '#fff' : 'var(--text-dim)';
   });
-  document.getElementById('v2Controls').style.display = ver === 'v2' ? 'flex' : 'none';
   document.getElementById('modelHint').textContent = ver === 'v3'
-    ? 'Pro: Stacking Ensemble (LightGBM + XGBoost + RF \u2192 Ridge meta) | 37 features | prediction rescaling | \u00b12% threshold'
-    : 'Lite: Random Forest (80%) + XGBoost (20%) | 13 features | prediction rescaling | \u00b12% threshold';
+    ? 'Pro: Stacking Ensemble (LightGBM + XGBoost + RF \u2192 inverse-MAE weighted) | 22 features | Z-score \u00b12.5\u03c3 | Auto: ETF\u2192Full, Stock\u2192Buy-Only'
+    : 'Lite: Random Forest (80%) + XGBoost (20%) | 13 features | Z-score \u00b12.5\u03c3 | Auto: ETF\u2192Full, Stock\u2192Buy-Only';
 }
 
 
@@ -397,10 +384,6 @@ async function runPredict() {
   const btn = document.getElementById('btnPredict');
   const out = document.getElementById('predResult');
 
-  const rfPct = parseInt(document.getElementById('rfWeight').value);
-  const weightRf = rfPct / 100;
-  const weightXgb = (100 - rfPct) / 100;
-  const rollingWindow = parseInt(document.getElementById('rollingWindow').value) || 0;
   const version = selectedModel;
 
   btn.disabled = true;
@@ -408,8 +391,7 @@ async function runPredict() {
   out.innerHTML = loaderHTML(version === 'v3' ? 'Building Pro stacking ensemble\u2026' : 'Running Lite ensemble\u2026');
 
   try {
-    let url = `${API_BASE}/api/predict/${encodeURIComponent(sym)}?version=${version}&weight_rf=${weightRf}&weight_xgb=${weightXgb}`;
-    if (rollingWindow > 0) url += `&rolling_window=${rollingWindow}`;
+    let url = `${API_BASE}/api/predict/${encodeURIComponent(sym)}?version=${version}`;
     const res = await fetch(url);
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
@@ -478,6 +460,7 @@ function buildSingleCard(d) {
         <div style="display:flex;align-items:center;gap:14px">
           <span class="pred-symbol">${d.symbol}</span>
           ${signalHTML(d.signal)}
+          ${d.strategy_label ? `<span style="font-size:10px;padding:2px 8px;border-radius:4px;background:var(--bg-cell);color:var(--text-dim);border:1px solid var(--border)">${d.strategy_label}</span>` : ''}
         </div>
         ${pctHTML(d.pct_change)}
       </div>
@@ -498,8 +481,9 @@ function buildSingleCard(d) {
       ${svrBlock}
       ${bt}
       <div class="stats-row">
-        <span>Model: <strong>${d.model_version === 'v3' ? 'Pro' : d.model_version === 'v2' ? 'Lite' : d.model_version || 'Lite'}</strong></span>
-        <span>Scale: <strong>${d.scale_factor ? d.scale_factor+'x' : '\u2014'}</strong></span>
+        <span>Model: <strong>${d.model_version || 'Lite'}</strong></span>
+        <span>Strategy: <strong>${d.strategy_label || 'Auto'}</strong></span>
+        <span>Z-Score: <strong>${d.z_score != null ? (d.z_score>=0?'+':'')+d.z_score : '\u2014'}</strong></span>
         <span>Dir Acc: <strong>${d.direction_accuracy ? d.direction_accuracy+'%' : '\u2014'}</strong></span>
         <span>MAE: <strong>${d.backtest_mae_pct ? d.backtest_mae_pct+'%' : '\u2014'}</strong></span>
         <span>Through: <strong>${d.last_date}</strong></span>
@@ -577,7 +561,7 @@ function buildCompareCard(d) {
         <div class="compare-metric"><span class="cm-label">Change</span><span class="cm-value" style="color:${m.pct_change>=0?'var(--green-text)':'var(--red-text)'}">${m.pct_change>=0?'+':''}${m.pct_change}%</span></div>
         <div class="compare-metric"><span class="cm-label">Signal</span><span class="cm-value">${signalHTML(m.signal)}</span></div>
         <div class="compare-metric"><span class="cm-label">Dir Accuracy</span><span class="cm-value">${m.direction_accuracy ? m.direction_accuracy+'%' : '\u2014'}</span></div>
-        <div class="compare-metric"><span class="cm-label">Scale Factor</span><span class="cm-value">${m.scale_factor ? m.scale_factor+'x' : '\u2014'}</span></div>
+        <div class="compare-metric"><span class="cm-label">Z-Score</span><span class="cm-value" style="color:${(m.z_score||0)>=2.5?'var(--green-text)':(m.z_score||0)<=-2.5?'var(--red-text)':'inherit'}">${m.z_score != null ? (m.z_score>=0?'+':'')+m.z_score : '\u2014'}</span></div>
         ${bt.strategy_return != null ? `
         <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
           <div style="font-size:9px;color:var(--text-dim);letter-spacing:1px;margin-bottom:6px;text-transform:uppercase">Backtest</div>
@@ -607,12 +591,13 @@ function buildCompareCard(d) {
         <div class="consensus-label">Consensus Signal</div>
         <div class="consensus-signal" style="color:${consColor}">${cs}</div>
         <div style="font-size:11px;color:${consColor};margin-top:4px;opacity:0.8">Confidence: <strong class="conf-${conf}">${conf}</strong></div>
+        ${d.strategy_label ? `<div style="font-size:10px;margin-top:6px;color:var(--text-dim)">Strategy: <strong>${d.strategy_label}</strong> ${d.strategy_mode==='full'?'(ETF — SELL signals active)':'(Stock — BUY only, hold)'}</div>` : ''}
       </div>
 
       <!-- Side by side -->
       <div class="compare-grid">
         ${modelCol(v2, 'Lite (13 features)', 'var(--blue-light)')}
-        ${modelCol(v3, 'Pro (37 features)', 'var(--purple-text)')}
+        ${modelCol(v3, 'Pro (22 features)', 'var(--purple-text)')}
       </div>
 
       ${svrBlock}
@@ -752,36 +737,112 @@ function renderReport(json) {
   el.innerHTML = summaryHTML + highConfHTML + fullHTML;
 }
 
+// ── Sortable report table ──
+let _reportTableId = 0;  // unique ID per table instance
+
+function buildReportRow(r) {
+  const v2 = r.v2 || {};
+  const v3 = r.v3 || {};
+  const v2pct = v2.pct_change != null ? v2.pct_change : null;
+  const v3pct = v3.pct_change != null ? v3.pct_change : null;
+  const svr = r.svr;
+  const stratLabel = r.strategy_label || (r.strategy_mode === 'full' ? 'Full' : r.strategy_mode === 'buy_only' ? 'Buy-Only' : '\u2014');
+  const stratColor = r.strategy_mode === 'full' ? 'var(--blue-light)' : 'var(--text-dim)';
+  return `
+  <tr>
+    <td class="mono" style="font-weight:700;color:var(--text-primary)">${r.symbol}</td>
+    <td class="mono" style="color:var(--text-muted)">${fmt$(r.current_price)}</td>
+    <td>${v2pct != null ? pctHTML(v2pct) : '\u2014'}</td>
+    <td>${v2.signal ? signalHTML(v2.signal) : '\u2014'}</td>
+    <td>${v3pct != null ? pctHTML(v3pct) : '\u2014'}</td>
+    <td>${v3.signal ? signalHTML(v3.signal) : '\u2014'}</td>
+    <td>${signalHTML(r.consensus_signal)}</td>
+    <td><span class="conf-${r.confidence}" style="font-size:11px;font-weight:700;font-family:var(--mono)">${r.confidence}</span></td>
+    <td style="font-size:10px;color:${stratColor};font-weight:600">${stratLabel}</td>
+    <td class="svr-cell" style="color:${svrColor(svr)}">${svr != null ? svr.toFixed(1)+'x' : '\u2014'}</td>
+  </tr>`;
+}
+
+// Sort value extractors per column key
+const SORT_KEYS = {
+  symbol:    r => (r.symbol || '').toUpperCase(),
+  price:     r => r.current_price || 0,
+  lite_chg:  r => (r.v2 || {}).pct_change != null ? (r.v2 || {}).pct_change : -Infinity,
+  lite_sig:  r => { const s = ((r.v2||{}).signal||'HOLD'); return s==='BUY'?0:s==='SELL'?1:2; },
+  pro_chg:   r => (r.v3 || {}).pct_change != null ? (r.v3 || {}).pct_change : -Infinity,
+  pro_sig:   r => { const s = ((r.v3||{}).signal||'HOLD'); return s==='BUY'?0:s==='SELL'?1:2; },
+  consensus: r => { const s = r.consensus_signal||'HOLD'; return s==='BUY'?0:s==='SELL'?1:2; },
+  conf:      r => { const c = r.confidence||''; return c==='HIGH'?0:c==='MEDIUM'?1:c==='CONFLICT'?2:3; },
+  strategy:  r => (r.strategy_mode === 'full' ? 0 : 1),
+  svr:       r => r.svr != null ? r.svr : Infinity,
+};
+
+// Track sort state per table
+const _sortStates = {};
+
+function sortReportTable(tableId, key, rows) {
+  const prev = _sortStates[tableId] || { key: null, asc: true };
+  const numericCols = ['price','lite_chg','pro_chg','svr'];
+  let asc;
+  if (prev.key === key) {
+    asc = !prev.asc;  // toggle direction
+  } else {
+    asc = numericCols.includes(key) ? false : true;  // numeric → desc first, text → asc first
+  }
+  const st = { key, asc };
+  _sortStates[tableId] = st;
+
+  const extractor = SORT_KEYS[key] || (r => 0);
+  const sorted = [...rows].sort((a, b) => {
+    let va = extractor(a), vb = extractor(b);
+    if (typeof va === 'string') return st.asc ? va.localeCompare(vb) : vb.localeCompare(va);
+    return st.asc ? va - vb : vb - va;
+  });
+
+  const tbody = document.querySelector(`#${tableId} tbody`);
+  if (tbody) tbody.innerHTML = sorted.map(buildReportRow).join('');
+
+  // Update header arrows
+  document.querySelectorAll(`#${tableId} th.sortable`).forEach(th => {
+    const arrow = th.querySelector('.sort-arrow');
+    if (th.dataset.sortKey === key) {
+      arrow.textContent = st.asc ? ' \u25B2' : ' \u25BC';
+      arrow.style.opacity = '1';
+    } else {
+      arrow.textContent = ' \u25B4';
+      arrow.style.opacity = '0.3';
+    }
+  });
+}
+
 function buildReportTable(rows) {
-  const trs = rows.map(r => {
-    const v2 = r.v2 || {};
-    const v3 = r.v3 || {};
-    const v2pct = v2.pct_change != null ? v2.pct_change : null;
-    const v3pct = v3.pct_change != null ? v3.pct_change : null;
-    const svr = r.svr;
-    return `
-    <tr>
-      <td class="mono" style="font-weight:700;color:var(--text-primary)">${r.symbol}</td>
-      <td class="mono" style="color:var(--text-muted)">${fmt$(r.current_price)}</td>
-      <td>${v2pct != null ? pctHTML(v2pct) : '\u2014'}</td>
-      <td>${v2.signal ? signalHTML(v2.signal) : '\u2014'}</td>
-      <td>${v3pct != null ? pctHTML(v3pct) : '\u2014'}</td>
-      <td>${v3.signal ? signalHTML(v3.signal) : '\u2014'}</td>
-      <td>${signalHTML(r.consensus_signal)}</td>
-      <td><span class="conf-${r.confidence}" style="font-size:11px;font-weight:700;font-family:var(--mono)">${r.confidence}</span></td>
-      <td class="svr-cell" style="color:${svrColor(svr)}">${svr != null ? svr.toFixed(1)+'x' : '\u2014'}</td>
-    </tr>`;
-  }).join('');
+  const tid = `rptTbl${_reportTableId++}`;
+  const trs = rows.map(buildReportRow).join('');
+
+  const cols = [
+    { key: 'symbol',    label: 'Symbol' },
+    { key: 'price',     label: 'Price' },
+    { key: 'lite_chg',  label: 'Lite Chg' },
+    { key: 'lite_sig',  label: 'Lite Sig' },
+    { key: 'pro_chg',   label: 'Pro Chg' },
+    { key: 'pro_sig',   label: 'Pro Sig' },
+    { key: 'consensus', label: 'Consensus' },
+    { key: 'conf',      label: 'Conf' },
+    { key: 'strategy',  label: 'Strategy' },
+    { key: 'svr',       label: 'SVR' },
+  ];
+
+  const ths = cols.map(c =>
+    `<th class="sortable" data-sort-key="${c.key}" onclick="sortReportTable('${tid}','${c.key}',window._rptData_${tid})">${c.label}<span class="sort-arrow" style="opacity:0.3;font-size:9px"> \u25B4</span></th>`
+  ).join('');
+
+  // Store data reference on window so onclick can access it
+  window[`_rptData_${tid}`] = rows;
 
   return `
     <div class="tbl-wrap">
-      <table>
-        <thead><tr>
-          <th>Symbol</th><th>Price</th>
-          <th>Lite Chg</th><th>Lite Sig</th>
-          <th>Pro Chg</th><th>Pro Sig</th>
-          <th>Consensus</th><th>Conf</th><th>SVR</th>
-        </tr></thead>
+      <table id="${tid}">
+        <thead><tr>${ths}</tr></thead>
         <tbody>${trs}</tbody>
       </table>
     </div>`;
