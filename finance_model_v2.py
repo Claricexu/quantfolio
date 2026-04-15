@@ -57,7 +57,7 @@ os.environ['PYTHONWARNINGS'] = 'ignore'
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-DEFAULT_CACHE_DIR = r"C:\Users\xkxuq\Documents\Starup\Finance\data_cache"
+DEFAULT_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data_cache')
 CACHE_DIR = os.environ.get("FINANCE_CACHE_DIR", DEFAULT_CACHE_DIR)
 CACHE_DAYS = 1
 FETCH_DELAY_SEC = 1.5
@@ -67,6 +67,10 @@ THRESHOLD = 2.5          # Z-score threshold (±2.5 sigma — optimal per sensit
 ZSCORE_LOOKBACK = 126    # ~6 months rolling window for Z-score computation
 RETRAIN_FREQ_V2 = 63     # aligned with Z-score lookback (was 20, caused stale cash positions)
 RETRAIN_FREQ_V3 = 63
+BACKTEST_PREFERRED_START = '2015-01-02'   # preferred start — gives 5 yr training from 2010
+MIN_TRAIN_DAYS = 126     # ~6 months minimum training data (was 252; lowered for newer IPOs like TEM)
+MIN_BACKTEST_DAYS = 50   # need at least 50 days for meaningful backtest
+MIN_ZSCORE_SAMPLES = 20  # minimum predictions before Z-score signals activate
 MODEL_VERSION = 'v3' if HAS_LGBM else 'v2'
 
 # Strategy mode: "full" (BUY+SELL), "buy_only" (BUY only, hold forever), "auto" (ETF→full, stock→buy_only)
@@ -230,7 +234,8 @@ def engineer_features_v2(df):
     bh, bl = bb.bollinger_hband(), bb.bollinger_lband()
     df['Dist_SMA50']=(c-s50)/s50; df['Dist_SMA200']=(c-s200)/s200
     df['Dist_EMA50']=(c-e50)/e50; df['Dist_EMA200']=(c-e200)/e200
-    df['RSI']=rsi; df['BB_Position']=(c-bl)/(bh-bl); df['BB_Width']=(bh-bl)/c
+    bb_w=bh-bl; df['RSI']=rsi
+    df['BB_Position']=np.where(bb_w.abs()>1e-10,(c-bl)/bb_w,0.5); df['BB_Width']=bb_w/c
     df['Return_1d']=c.pct_change(1); df['Return_5d']=c.pct_change(5); df['Return_20d']=c.pct_change(20)
     df['RVol_20d']=df['Return_1d'].rolling(20).std()
     df['SMA_Cross']=(s50>s200).astype(float); df['EMA_Cross']=(e50>e200).astype(float)
@@ -268,7 +273,7 @@ def engineer_features_v3(df):
     bb=BollingerBands(c,20,2); bh,bl=bb.bollinger_hband(),bb.bollinger_lband()
     # Core price structure (9)
     df['Dist_SMA50']=(c-s50)/s50; df['Dist_SMA200']=(c-s200)/s200
-    df['RSI']=rsi; df['BB_Position']=(c-bl)/(bh-bl)
+    bb_w=bh-bl; df['RSI']=rsi; df['BB_Position']=np.where(bb_w.abs()>1e-10,(c-bl)/bb_w,0.5)
     df['Return_1d']=c.pct_change(1); df['Return_5d']=c.pct_change(5); df['Return_20d']=c.pct_change(20)
     df['RVol_20d']=df['Return_1d'].rolling(20).std()
     df['SMA_Cross']=(s50>s200).astype(float)
@@ -341,12 +346,23 @@ def build_stacking_ensemble(X_train,y_train,X_val,y_val):
     mask=np.any(oof!=0,axis=1)
     oof_valid=oof[mask]; y_valid=y_train[mask]
     mae_per_model=np.array([np.mean(np.abs(oof_valid[:,j]-y_valid)) for j in range(3)])
-    inv_mae=1.0/(mae_per_model+1e-10)
+    inv_mae=1.0/(mae_per_model+0.005)  # larger epsilon prevents extreme weight imbalance
     weights=inv_mae/inv_mae.sum()
     # Retrain final models on full training data
     fl=train_lgbm_v3(X_train,y_train,X_val,y_val)
     fx=train_xgb_v3(X_train,y_train,X_val,y_val)
     fr=train_rf_v3(X_train,y_train)
+    return {'lgbm':fl,'xgb':fx,'rf':fr,'weights':weights}
+
+def build_stacking_ensemble_fast(X_train,y_train,X_val,y_val):
+    """Fast version for backtest charts — skips 5-fold OOF, uses val-set MAE for weights.
+    ~6x faster: 3 model fits per retrain instead of 18."""
+    fl=train_lgbm_v3(X_train,y_train,X_val,y_val)
+    fx=train_xgb_v3(X_train,y_train,X_val,y_val)
+    fr=train_rf_v3(X_train,y_train)
+    preds=np.column_stack([fl.predict(X_val),fx.predict(X_val),fr.predict(X_val)])
+    mae=np.array([np.mean(np.abs(preds[:,j]-y_val)) for j in range(3)])
+    inv_mae=1.0/(mae+0.005); weights=inv_mae/inv_mae.sum()  # 0.005 prevents extreme weight imbalance
     return {'lgbm':fl,'xgb':fx,'rf':fr,'weights':weights}
 
 def predict_v3(ens,X):
@@ -370,12 +386,12 @@ def predict_ticker(symbol,cache_dir=None,verbose=True,version=None,strategy=None
         df=engineer_features_v2(df); fcols=V2_FEATURE_COLS; ver='v2'
 
     latest_row=df.iloc[-1:]; dc=df.dropna(subset=['Target_Return']+fcols).copy()
-    if len(dc)<300: return {"symbol":symbol,"error":f"Insufficient data ({len(dc)} rows)"}
+    if len(dc)<100: return {"symbol":symbol,"error":f"Insufficient data ({len(dc)} rows, need 100+)"}
 
     aX=dc[fcols].values; ay=dc['Target_Return'].values; te=len(aX)
     vs=int(te*0.85); Xtr,ytr=aX[:vs],ay[:vs]; Xvl,yvl=aX[vs:],ay[vs:]
 
-    scaler=StandardScaler(); scaler.fit(aX[:te])
+    scaler=StandardScaler(); scaler.fit(Xtr)  # fit on TRAIN only — no validation leakage
     Xtr_s=scaler.transform(Xtr); Xvl_s=scaler.transform(Xvl)
 
     if ver=='v3':
@@ -393,25 +409,41 @@ def predict_ticker(symbol,cache_dir=None,verbose=True,version=None,strategy=None
     # Build prediction history for Z-score (using recent validation predictions)
     pred_history=list(yp[-ZSCORE_LOOKBACK:])
 
-    # Quick backtest on validation using Z-score signals
-    btc,bts=10000.0,0.0; btp=[]; bt_pred_hist=list(yp[:20])  # seed
-    for j in range(20,len(Xvl)):
+    # Quick backtest on validation using Z-score signals (respects strategy mode)
+    seed_n=min(20,max(5,len(Xvl)//3))  # adaptive seed for short-history tickers
+    btc,bts=10000.0,0.0; btp=[]; bt_pred_hist=list(yp[:seed_n])  # seed
+    for j in range(seed_n,len(Xvl)):
         pr=yp[j]; bp=float(dc['Close'].iloc[vs+j]) if vs+j<len(dc) else float(dc['Close'].iloc[-1])
         bt_pred_hist.append(pr)
         if len(bt_pred_hist)>ZSCORE_LOOKBACK: bt_pred_hist=bt_pred_hist[-ZSCORE_LOOKBACK:]
         hist=np.array(bt_pred_hist[:-1])
         mu,sigma=np.mean(hist),np.std(hist)
         z=(pr-mu)/sigma if sigma>1e-10 else 0.0
-        if z>=THRESHOLD and btc>0: bts=btc/bp; btc=0
-        elif z<=-THRESHOLD and bts>0: btc=bts*bp; bts=0
+        if strat == 'buy_only':
+            # Buy-Only: only buy on strong Z-score, never sell
+            if z>=THRESHOLD and btc>0: bts=btc/bp; btc=0
+        else:
+            # Full Signal: buy and sell on Z-score
+            if z>=THRESHOLD and btc>0: bts=btc/bp; btc=0
+            elif z<=-THRESHOLD and bts>0: btc=bts*bp; bts=0
         btp.append(btc+bts*bp)
     bt_ret=(btp[-1]/10000-1)*100 if btp else 0
-    tc=dc['Close'].values[vs+20:vs+20+len(btp)]
+    tc=dc['Close'].values[vs+seed_n:vs+seed_n+len(btp)]
     bnh_ret=(tc[-1]/tc[0]-1)*100 if len(tc)>0 else 0
+    # Strategy stats
     bd=np.diff(btp)/np.array(btp[:-1]) if len(btp)>1 else [0]
     bt_sh=float(np.mean(bd)/np.std(bd)*np.sqrt(252)) if np.std(bd)>0 else 0
     bpk=np.maximum.accumulate(btp) if btp else [1]
     bt_dd=float(((np.array(btp)-bpk)/bpk).min())*100
+    # Buy & Hold stats for the same validation window (benchmark)
+    if len(tc)>1:
+        bnh_port=10000.0*(tc/tc[0])
+        bnh_dr=np.diff(bnh_port)/bnh_port[:-1]
+        bnh_sh=float(np.mean(bnh_dr)/np.std(bnh_dr)*np.sqrt(252)) if np.std(bnh_dr)>0 else 0
+        bnh_pk=np.maximum.accumulate(bnh_port)
+        bnh_dd=float(((bnh_port-bnh_pk)/bnh_pk).min())*100
+    else:
+        bnh_sh=0; bnh_dd=0
 
     # Predict next day
     lf=latest_row[fcols].values
@@ -469,7 +501,9 @@ def predict_ticker(symbol,cache_dir=None,verbose=True,version=None,strategy=None
             "data_points":len(dc),"train_window":te,"train_window_setting":"All data",
             "last_date":str(df.index[-1].date()),
             "backtest":{"strategy_return":round(bt_ret,2),"buyhold_return":round(bnh_ret,2),
-                        "sharpe":round(bt_sh,2),"max_drawdown":round(bt_dd,1),"test_days":len(btp)}}
+                        "sharpe":round(bt_sh,2),"max_drawdown":round(bt_dd,1),
+                        "bnh_sharpe":round(bnh_sh,2),"bnh_max_drawdown":round(bnh_dd,1),
+                        "test_days":len(btp)}}
     if verbose:
         svr_s=f"{svr:.1f}x" if svr else "N/A"
         print(f"\n{'='*55}\n  {symbol}  ({vl} | {strat_label})\n{'='*55}")
@@ -641,20 +675,25 @@ def backtest_symbol(symbol,cache_dir=None,version=None,initial_cash=10000,strate
     else:
         df=engineer_features_v2(df); fc=V2_FEATURE_COLS; rf_freq=RETRAIN_FREQ_V2; ver='v2'
     dc=df.dropna(subset=['Target_Return']+fc).copy()
-    bt_s='2015-01-02'; bm=dc.index>=pd.Timestamp(bt_s)
-    if bm.sum()==0: print(f"No data after {bt_s}"); return None
-    bsi=np.argmax(bm); aX=dc[fc].values; ay=dc['Target_Return'].values
+    # Dynamic backtest start: prefer 2015, but for newer tickers use earliest feasible date
+    bm=dc.index>=pd.Timestamp(BACKTEST_PREFERRED_START)
+    bsi=np.argmax(bm) if bm.any() else 0
+    bsi=max(bsi, MIN_TRAIN_DAYS)  # ensure enough training data
+    if bsi>=len(dc)-MIN_BACKTEST_DAYS:
+        print(f"Not enough data for backtest ({len(dc)} rows, need {MIN_TRAIN_DAYS}+{MIN_BACKTEST_DAYS})")
+        return None
+    aX=dc[fc].values; ay=dc['Target_Return'].values
     ap=dc['Close'].values.ravel()
     cash,sh=initial_cash,0.0; port,sigs=[],[]; mdl=None; sc=StandardScaler(); rc=0
     pred_history=[]  # rolling window of recent predictions for Z-score
 
     for i in range(bsi,len(aX)-1):
         if mdl is None or rc>=rf_freq:
-            vs=int(i*0.85); sc.fit(aX[:i])
+            vs=int(i*0.85); sc.fit(aX[:vs])  # fit on TRAIN only — no validation leakage
             if ver=='v3':
                 mdl=build_stacking_ensemble(sc.transform(aX[:vs]),ay[:vs],sc.transform(aX[vs:i]),ay[vs:i]); pf=predict_v3
             else:
-                mdl=(train_rf_v2(sc.transform(aX[:i]),ay[:i]),train_xgb_v2(sc.transform(aX[:i]),ay[:i])); pf=predict_v2
+                mdl=(train_rf_v2(sc.transform(aX[:vs]),ay[:vs]),train_xgb_v2(sc.transform(aX[:vs]),ay[:vs])); pf=predict_v2
             # Seed prediction history with validation predictions
             if not pred_history:
                 seed_preds=pf(mdl,sc.transform(aX[vs:i]))
@@ -666,7 +705,7 @@ def backtest_symbol(symbol,cache_dir=None,version=None,initial_cash=10000,strate
         if len(pred_history)>ZSCORE_LOOKBACK: pred_history=pred_history[-ZSCORE_LOOKBACK:]
 
         # Compute Z-score
-        if len(pred_history)>=20:
+        if len(pred_history)>=MIN_ZSCORE_SAMPLES:
             hist=np.array(pred_history[:-1])
             mu,sigma=np.mean(hist),np.std(hist)
             z=(raw_pred-mu)/sigma if sigma>1e-10 else 0.0
@@ -696,6 +735,123 @@ def backtest_symbol(symbol,cache_dir=None,version=None,initial_cash=10000,strate
     print(f"  Period: {len(port)} days | Signals: {nb} BUY, {ns} SELL, {sigs.count('HOLD')} HOLD")
     print(f"  Strategy: {sr:+.1f}% | B&H: {br:+.1f}% | Sharpe: {sh_r:.2f} | MaxDD: {mdd:.1f}%")
     return port
+
+
+def backtest_multi_strategy(symbol, cache_dir=None, version=None, initial_cash=10000, progress_cb=None):
+    """Walk-forward backtest running BOTH full and buy_only strategies simultaneously.
+    Trains model once per retrain window, applies both signal logics — efficient for charts.
+    Uses fast ensemble (no 5-fold OOF) for ~6x speedup on Pro.
+    Returns dict with dates, portfolio arrays, and stats for each strategy."""
+    cache_dir = cache_dir or CACHE_DIR
+    ver = version or MODEL_VERSION
+    raw = fetch_stock_data([symbol], cache_dir=cache_dir)
+    if symbol not in raw or raw[symbol].empty:
+        return None
+    df = raw[symbol].copy()
+    if ver == 'v3' and HAS_LGBM:
+        df = engineer_features_v3(df); fc = V3_FEATURE_COLS; rf_freq = RETRAIN_FREQ_V3
+    else:
+        df = engineer_features_v2(df); fc = V2_FEATURE_COLS; rf_freq = RETRAIN_FREQ_V2; ver = 'v2'
+    dc = df.dropna(subset=['Target_Return'] + fc).copy()
+    # Dynamic backtest start: prefer 2015, but for newer tickers use earliest feasible date
+    bm = dc.index >= pd.Timestamp(BACKTEST_PREFERRED_START)
+    bsi = np.argmax(bm) if bm.any() else 0
+    bsi = max(bsi, MIN_TRAIN_DAYS)  # ensure enough training data
+    if bsi >= len(dc) - MIN_BACKTEST_DAYS:
+        print(f"  [{symbol}] Not enough data for backtest ({len(dc)} rows, need {MIN_TRAIN_DAYS}+{MIN_BACKTEST_DAYS})")
+        return None
+    aX = dc[fc].values; ay = dc['Target_Return'].values
+    ap = dc['Close'].values.ravel()
+
+    # Two parallel portfolios: full signal and buy-only
+    f_cash, f_sh = initial_cash, 0.0
+    b_cash, b_sh = initial_cash, 0.0
+    f_port, b_port, dates_out = [], [], []
+    f_sigs, b_sigs = [], []
+    mdl = None; sc = StandardScaler(); rc = 0; pred_history = []
+
+    # Progress tracking
+    n_loop = len(aX) - 1 - bsi
+    total_retrains = 1 + max(0, n_loop - 1) // rf_freq
+    retrain_num = 0
+
+    for i in range(bsi, len(aX) - 1):
+        if mdl is None or rc >= rf_freq:
+            retrain_num += 1
+            if progress_cb:
+                progress_cb(retrain_num, total_retrains)
+            vs = int(i * 0.85); sc.fit(aX[:vs])  # fit on TRAIN only — no validation leakage
+            if ver == 'v3':
+                mdl = build_stacking_ensemble_fast(sc.transform(aX[:vs]), ay[:vs],
+                                                   sc.transform(aX[vs:i]), ay[vs:i])
+                pf = predict_v3
+            else:
+                mdl = (train_rf_v2(sc.transform(aX[:vs]), ay[:vs]),
+                       train_xgb_v2(sc.transform(aX[:vs]), ay[:vs]))
+                pf = predict_v2
+            if not pred_history:
+                seed_preds = pf(mdl, sc.transform(aX[vs:i]))
+                pred_history = list(seed_preds[-ZSCORE_LOOKBACK:])
+            rc = 0
+
+        raw_pred = pf(mdl, sc.transform(aX[i:i + 1]))[0]
+        pred_history.append(raw_pred)
+        if len(pred_history) > ZSCORE_LOOKBACK:
+            pred_history = pred_history[-ZSCORE_LOOKBACK:]
+
+        if len(pred_history) >= MIN_ZSCORE_SAMPLES:
+            hist = np.array(pred_history[:-1])
+            mu, sigma = np.mean(hist), np.std(hist)
+            z = (raw_pred - mu) / sigma if sigma > 1e-10 else 0.0
+        else:
+            z = 0.0
+
+        pr = float(ap[i])
+        dates_out.append(dc.index[i].strftime('%Y-%m-%d'))
+
+        # Full Signal strategy
+        if z >= THRESHOLD and f_cash > 0:
+            f_sh = f_cash / pr; f_cash = 0; f_sigs.append('BUY')
+        elif z <= -THRESHOLD and f_sh > 0:
+            f_cash = f_sh * pr; f_sh = 0; f_sigs.append('SELL')
+        else:
+            f_sigs.append('HOLD')
+        f_port.append(f_cash + f_sh * pr)
+
+        # Buy-Only strategy
+        if z >= THRESHOLD and b_cash > 0:
+            b_sh = b_cash / pr; b_cash = 0; b_sigs.append('BUY')
+        else:
+            b_sigs.append('HOLD')
+        b_port.append(b_cash + b_sh * pr)
+
+        rc += 1
+
+    f_port = np.array(f_port); b_port = np.array(b_port)
+    tp = ap[bsi:bsi + len(f_port)]; bnh = initial_cash * (tp / tp[0])
+
+    def _stats(port, sigs):
+        ret = (port[-1] / initial_cash - 1) * 100
+        dr = np.diff(port) / port[:-1]
+        sharpe = float(np.mean(dr) / np.std(dr) * np.sqrt(252)) if np.std(dr) > 0 else 0
+        pk = np.maximum.accumulate(port)
+        mdd = float(((port - pk) / pk).min()) * 100
+        return {'return_pct': round(ret, 1), 'sharpe': round(sharpe, 2),
+                'max_drawdown': round(mdd, 1),
+                'buys': sigs.count('BUY'), 'sells': sigs.count('SELL')}
+
+    ver_label = "Pro" if ver == 'v3' else "Lite"
+    start_date = dates_out[0] if dates_out else None
+    print(f"  [{ver_label}] Multi-strategy backtest done — {len(f_port)} days from {start_date}")
+    return {
+        'symbol': symbol, 'version': ver, 'version_label': ver_label,
+        'period_days': len(f_port), 'start_date': start_date, 'dates': dates_out,
+        'buyhold': [round(v, 2) for v in bnh.tolist()],
+        'full': {'portfolio': [round(v, 2) for v in f_port.tolist()], **_stats(f_port, f_sigs)},
+        'buy_only': {'portfolio': [round(v, 2) for v in b_port.tolist()], **_stats(b_port, b_sigs)},
+        'buyhold_stats': _stats(bnh, []),
+    }
+
 
 # =============================================================================
 # CLI

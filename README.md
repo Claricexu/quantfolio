@@ -1,31 +1,47 @@
 # Quantfolio
 
-A patient investor's ML toolkit that combines quantitative signals with value principles. One-click dashboard, two ensemble models, zero dependencies on Wall Street.
+A patient investor's ML toolkit that combines quantitative signals with value principles. One-click dashboard, two ensemble models, walk-forward backtesting, zero dependencies on Wall Street.
 
 ## Architecture
 
 ```
-Browser (UI)        FastAPI Server       ML Engine
-index.html    <-->  api_server.py  -->  Lite model (RF + XGBoost)
-(port 8000)                        -->  Pro model (Stacking Ensemble)
-                                          |
-                                   Yahoo Finance API + Local CSV Cache
+Browser (Dashboard)     FastAPI Server          ML Engine
+index.html        <-->  api_server.py    -->   Lite model (RF + XGBoost)
+ ├─ Ticker Lookup                        -->   Pro model (Stacking Ensemble)
+ ├─ Daily Report                                |
+ └─ Strategy Lab                         Yahoo Finance API + Local CSV Cache
+(port 8000)
 ```
 
 ## Features
 
-- **Ticker Lookup** — Enter any ticker, run Lite or Pro model, or compare both side-by-side
-- **Compare Both** — Run Lite and Pro simultaneously, see predictions and confidence
-- **Daily Report** — Auto-scans 73+ symbols at market close, generates a unified report with sortable columns
+- **Ticker Lookup** — Enter any ticker, run Lite or Pro model, or compare both side-by-side with consensus signal
+- **Compare Both** — Run Lite and Pro simultaneously with confidence scoring and best strategy recommendation
+- **Daily Report** — Auto-scans 78 symbols at market close, generates a sortable report with best strategy per ticker
+- **Strategy Lab** — Batch walk-forward backtesting across all tickers, equity curve charting, and strategy comparison library
 - **Auto Strategy Mode** — ETFs use Full Signal (BUY+SELL), individual stocks use Buy-Only (BUY only, hold)
-- **SVR (Simple Value Ratio)** — Quick valuation check (Market Cap / Annualized Revenue)
+- **SVR (Simple Value Ratio)** — Quick valuation check (Market Cap / Annualized Revenue), displayed in predictions and reports
+- **Best Strategy** — Each ticker's optimal risk-adjusted strategy (by Sharpe ratio) surfaced in lookup, report, and lab
+
+## Dashboard Tabs
+
+### Ticker Lookup
+Enter a symbol and click **Predict** (single model) or **Compare Both** (Lite vs Pro). Shows predicted price, percent change, signal (BUY/SELL/HOLD), SVR valuation, model sub-predictions, and best backtest strategy with Sharpe ratio.
+
+### Daily Report
+Auto-generated at 4:05 PM EST on trading days. Sortable table with columns: Symbol, Price, Change, Lite Signal, Pro Signal, Consensus, Confidence, Best Strategy. Click any column header to sort. Color-coded signals and confidence levels.
+
+### Strategy Lab
+- **Run Batch Backtest** — Backtests all tickers with 5 strategies (Buy & Hold, Lite Buy-Only, Lite Full, Pro Buy-Only, Pro Full). Skips tickers with fresh cached results (< 7 days).
+- **Library Table** — Sortable results showing best strategy, Sharpe ratio, total return, max drawdown, and Sharpe vs B&H delta for every ticker.
+- **Equity Curve Viewer** — Click any ticker row to load its interactive Chart.js equity curve with all 5 strategy lines color-coded.
 
 ## Models
 
 ### Lite (RF + XGBoost)
 - Random Forest (80% weight) + XGBoost (20% weight)
 - 13 features: SMA, EMA, RSI, Bollinger Bands, returns, volatility
-- Fixed blending weights, predictions clipped to ±8%
+- Fixed blending weights, predictions clipped to +/-8%
 
 ### Pro (Stacking Ensemble)
 - LightGBM + XGBoost + Random Forest
@@ -34,11 +50,11 @@ index.html    <-->  api_server.py  -->  Lite model (RF + XGBoost)
 - No prediction clipping — preserves full signal range
 
 ### Shared Design
-- **Signal strategy**: Z-score ±2.5σ relative to rolling 126-day prediction history
+- **Signal strategy**: Z-score +/-2.5 sigma relative to rolling 126-day prediction history
 - **Retrain frequency**: Every 63 trading days (walk-forward, no lookahead bias)
 - **Training window**: All data from 2010 to present (expanding window)
-- **SVR filter**: BUY requires SVR ≤ 7, SELL if SVR ≥ 15
-- **Auto strategy mode**: ETFs → Full Signal (BUY+SELL), Stocks → Buy-Only (BUY only)
+- **SVR filter**: BUY requires SVR <= 7, SELL if SVR >= 15
+- **Auto strategy mode**: ETFs -> Full Signal (BUY+SELL), Stocks -> Buy-Only (BUY only)
 
 ### Strategy Modes
 
@@ -52,7 +68,7 @@ Backtest-validated across SPY, QQQ, MU, META, SMH:
 
 ### Backtest Results
 
-#### Old vs New Model Comparison (SPY, 2015–2026)
+#### Old vs New Model Comparison (SPY, 2015-2026)
 
 | Metric | Old Lite | New Lite | Old Pro | New Pro | Buy & Hold |
 |---|---|---|---|---|---|
@@ -63,7 +79,7 @@ Backtest-validated across SPY, QQQ, MU, META, SMH:
 | Max Drawdown | -42.3% | -30.0% | -33.7% | -33.7% | -33.7% |
 | Trades | 22 | 32 | 1 | 18 | 0 |
 
-Key improvements: Lite Sharpe 0.26 → 0.59 (+0.33), Pro Sharpe 0.76 → 0.98 (+0.22).
+Key improvements: Lite Sharpe 0.26 -> 0.59 (+0.33), Pro Sharpe 0.76 -> 0.98 (+0.22).
 
 #### Buy-Only vs Full Signal (Cross-Symbol Sharpe)
 
@@ -96,6 +112,8 @@ python api_server.py
 ### 3. Open browser
 
 Navigate to **http://localhost:8000**
+
+The dashboard opens with three tabs: Ticker Lookup, Daily Report, and Strategy Lab.
 
 ## CLI Usage
 
@@ -134,35 +152,46 @@ Finance/
 ├── backtest_momentum_chaser.py  # Momentum chaser backtest (ON/O2O strategies)
 ├── backtest_diverse_ensemble.py # LGB+RF+MLP diverse ensemble test
 ├── frontend/
-│   └── index.html               # Dashboard UI (single-page app)
-├── Tickers.csv                  # Symbol universe (73 tickers)
+│   └── index.html               # Dashboard UI (single-page app, 3 tabs)
+├── Tickers.csv                  # Symbol universe (78 tickers)
 ├── requirements.txt             # Python dependencies
 ├── start_dashboard.bat          # One-click Windows launcher
-└── data_cache/                  # Auto-created: CSV cache + scan reports
+└── data_cache/                  # Auto-created: CSV cache, scan reports, backtest JSONs
 ```
 
 ## API Endpoints
 
-| Endpoint | Description |
-|---|---|
-| `GET /api/predict/{symbol}` | Single ticker prediction (`?version=v3&strategy=auto`) |
-| `GET /api/predict-compare/{symbol}` | Compare Lite vs Pro (`?strategy=auto`) |
-| `GET /api/report` | Daily dual-model scan report |
-| `GET /api/movers` | Cached daily scan results |
-| `GET /api/symbols` | Full symbol universe + ETF list + strategy info |
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/api/predict/{symbol}` | Single ticker prediction (`?version=v3&strategy=auto`) |
+| GET | `/api/predict-compare/{symbol}` | Compare Lite vs Pro with consensus signal and best strategy |
+| GET | `/api/report` | Daily dual-model scan report (`?refresh=true` to trigger fresh scan) |
+| GET | `/api/movers` | Cached daily scan results (`?refresh=true&version=v3`) |
+| GET | `/api/symbols` | Full symbol universe with ETF list and strategy info |
+| GET | `/api/backtest-chart/{symbol}` | Walk-forward backtest with 5 strategy equity curves (`?refresh=true`) |
+| GET | `/api/backtest-library` | Summary stats for all cached backtests |
+| POST | `/api/backtest-batch` | Start batch backtest for all uncached symbols |
+| GET | `/api/backtest-batch/status` | Poll batch backtest progress |
 
 Strategy parameter: `?strategy=auto` (default), `?strategy=full`, `?strategy=buy_only`
+
+## Scheduling
+
+When APScheduler is installed, the server automatically runs the dual-model report at **4:05 PM EST, Monday-Friday** (just after market close). Results are cached and served via `/api/report`.
+
+Without APScheduler, trigger manually: `GET /api/report?refresh=true`
 
 ## How It Works
 
 1. Fetches historical price data from Yahoo Finance (cached locally, from 2010)
-2. Engineers 13–22 technical features (SMA, MACD, RSI, ATR, Bollinger Bands, OBV, ADX, etc.)
+2. Engineers 13-22 technical features (SMA, MACD, RSI, ATR, Bollinger Bands, OBV, ADX, etc.)
 3. Trains ensemble models with walk-forward validation (expanding window, no lookahead bias)
 4. Predicts next-day close price, converts to Z-score relative to rolling 126-day prediction history
 5. Generates signals based on strategy mode:
-   - **Full Signal** (ETFs): BUY at Z ≥ 2.5σ, SELL at Z ≤ -2.5σ
-   - **Buy-Only** (Stocks): BUY at Z ≥ 2.5σ, never sell (hold)
-6. SVR valuation filter overrides: BUY blocked if SVR > 7, SELL forced if SVR ≥ 15
+   - **Full Signal** (ETFs): BUY at Z >= 2.5 sigma, SELL at Z <= -2.5 sigma
+   - **Buy-Only** (Stocks): BUY at Z >= 2.5 sigma, never sell (hold)
+6. SVR valuation filter overrides: BUY blocked if SVR > 7, SELL forced if SVR >= 15
+7. Walk-forward backtest compares 5 strategies over 10+ years, selects best by Sharpe ratio
 
 ## Adding Symbols
 
@@ -177,6 +206,8 @@ Edit `Tickers.csv` or modify `SYMBOL_UNIVERSE` in `finance_model_v2.py`, then re
 | Port 8000 in use | Edit `PORT = 8000` in `api_server.py` |
 | No report data | Click Refresh — first scan takes 2-5 min |
 | RF predict hangs on Windows | All models use `n_jobs=1` to avoid joblib deadlock |
+| Batch backtest stuck | Check server console for errors; restart server if needed |
+| Best Strategy shows "—" | Run batch backtest in Strategy Lab to generate data |
 
 ## License
 

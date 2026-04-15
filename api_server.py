@@ -20,8 +20,10 @@ Run:
 
 import os
 import json
+import time
 import threading
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -37,9 +39,11 @@ from finance_model_v2 import (
     daily_scan_both,
     get_all_symbols,
     get_strategy_mode,
+    backtest_multi_strategy,
     SYMBOL_UNIVERSE,
     CACHE_DIR,
     ETF_TICKERS,
+    HAS_LGBM,
     _ensure_cache_dir,
 )
 
@@ -82,8 +86,8 @@ def _run_daily_scan(version=None):
                 r = predict_ticker(sym, cache_dir=CACHE_DIR, verbose=False, version=version)
                 if "error" not in r:
                     results.append(r)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  [scan] {sym}: {e}")
             if (i + 1) % 10 == 0:
                 print(f"  [{i+1}/{len(symbols)}] scanned…")
 
@@ -115,25 +119,26 @@ def _run_daily_scan(version=None):
 
 
 def _start_scheduler():
-    """APScheduler job: 4:30 PM US/Eastern, Mon–Fri."""
+    """APScheduler: auto-run dual-model daily report after market close."""
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
         scheduler = BackgroundScheduler()
+        # Full Lite+Pro report at 4:05 PM EST (Yahoo Finance updates ~4:01 PM)
         scheduler.add_job(
-            _run_daily_scan,
+            _run_dual_report,
             'cron',
             day_of_week='mon-fri',
-            hour=16, minute=30,
+            hour=16, minute=5,
             timezone='US/Eastern',
-            id='daily_scan',
+            id='daily_dual_report',
             replace_existing=True,
         )
         scheduler.start()
-        print("[Scheduler] Daily scan → 4:30 PM EST, Mon–Fri.")
+        print("[Scheduler] Daily Lite+Pro report → 4:05 PM EST, Mon–Fri (auto after market close).")
     except ImportError:
         print("[Scheduler] apscheduler not installed — no auto-scheduling.")
         print("  Install: pip install apscheduler")
-        print("  Manual trigger: GET /api/movers?refresh=true")
+        print("  Manual trigger: GET /api/report?refresh=true")
 
 
 def _load_latest_scan_from_disk():
@@ -216,6 +221,9 @@ async def api_predict(symbol: str, version: str = None, strategy: str = None,
         raise HTTPException(500, f"Prediction failed: {exc}")
     if "error" in result:
         raise HTTPException(404, result["error"])
+    # Enrich with best backtest strategy if available
+    best_map = _get_best_strategy_map()
+    result['best_strategy'] = best_map.get(symbol)
     return JSONResponse(result)
 
 
@@ -237,6 +245,9 @@ async def api_predict_compare(symbol: str, strategy: str = None):
         raise HTTPException(500, f"Comparison failed: {exc}")
     if "error" in result:
         raise HTTPException(404, result["error"])
+    # Enrich with best backtest strategy if available
+    best_map = _get_best_strategy_map()
+    result['best_strategy'] = best_map.get(symbol)
     return JSONResponse(result)
 
 
@@ -281,31 +292,39 @@ async def api_report(refresh: bool = False):
     if refresh:
         with _report_lock:
             is_running = _report_cache["is_running"]
+            snap_data = _report_cache["data"]
+            snap_at = _report_cache["generated_at"]
         if not is_running:
             thread = threading.Thread(target=_run_dual_report, daemon=True)
             thread.start()
             return JSONResponse({
                 "status": "scan_started",
                 "message": "Dual-model report started. This may take 40-90 minutes.",
-                "data": _report_cache["data"],
-                "generated_at": _report_cache["generated_at"],
+                "data": snap_data,
+                "generated_at": snap_at,
             })
         else:
             return JSONResponse({
                 "status": "scan_in_progress",
                 "message": "Dual-model scan already running.",
-                "data": _report_cache["data"],
-                "generated_at": _report_cache["generated_at"],
+                "data": snap_data,
+                "generated_at": snap_at,
             })
 
-    # Try loading from disk if cache is empty
+    # Try loading from disk if cache is empty (call OUTSIDE lock — it acquires its own)
     if _report_cache["data"] is None:
         _load_latest_report_from_disk()
 
+    with _report_lock:
+        snap_data = _report_cache["data"]
+        snap_at = _report_cache["generated_at"]
+
+    best_strats = _get_best_strategy_map()
     return JSONResponse({
         "status": "ok",
-        "data": _report_cache["data"],
-        "generated_at": _report_cache["generated_at"],
+        "data": snap_data,
+        "generated_at": snap_at,
+        "best_strategies": best_strats,
     })
 
 
@@ -339,6 +358,8 @@ async def api_movers(refresh: bool = False, version: str = None):
     if refresh:
         with _movers_lock:
             is_running = _movers_cache["is_running"]
+            snap_data = _movers_cache["data"]
+            snap_at = _movers_cache["generated_at"]
         if not is_running:
             thread = threading.Thread(target=_run_daily_scan, args=(ver,), daemon=True)
             thread.start()
@@ -346,22 +367,27 @@ async def api_movers(refresh: bool = False, version: str = None):
             return JSONResponse({
                 "status": "scan_started",
                 "message": f"{ver_label} scan started. This may take a while.",
-                "data": _movers_cache["data"],
-                "generated_at": _movers_cache["generated_at"],
+                "data": snap_data,
+                "generated_at": snap_at,
             })
         else:
             return JSONResponse({
                 "status": "scan_in_progress",
                 "message": "Scan already running. Results update automatically.",
-                "data": _movers_cache["data"],
-                "generated_at": _movers_cache["generated_at"],
+                "data": snap_data,
+                "generated_at": snap_at,
             })
+    with _movers_lock:
+        snap_data = _movers_cache["data"]
+        snap_at = _movers_cache["generated_at"]
+        snap_count = len(snap_data)
+        snap_ver = _movers_cache.get("model_version", "unknown")
     return JSONResponse({
         "status": "ok",
-        "data": _movers_cache["data"],
-        "generated_at": _movers_cache["generated_at"],
-        "count": len(_movers_cache["data"]),
-        "model_version": _movers_cache.get("model_version", "unknown"),
+        "data": snap_data,
+        "generated_at": snap_at,
+        "count": snap_count,
+        "model_version": snap_ver,
     })
 
 
@@ -382,6 +408,428 @@ async def api_symbols():
                 "buy_only": "Buy-Only: BUY on Z-score, hold forever (best for stocks)",
             },
         },
+    })
+
+
+# ─── Backtest Chart ───
+
+_bt_cache = {}       # symbol -> {'status': 'running'|'done'|'error', 'data': ..., 'error': ...}
+_bt_progress = {}    # symbol -> {'v2': '5/44', 'v3': '12/44'}  — live progress
+_bt_lock = threading.Lock()
+
+
+def _run_backtest_chart(symbol):
+    """Background: run multi-strategy backtests for Lite and Pro IN PARALLEL."""
+    with _bt_lock:
+        _bt_progress[symbol] = {}
+
+    def v2_cb(step, total):
+        with _bt_lock:
+            _bt_progress.setdefault(symbol, {})['v2'] = f'{step}/{total}'
+
+    def v3_cb(step, total):
+        with _bt_lock:
+            _bt_progress.setdefault(symbol, {})['v3'] = f'{step}/{total}'
+
+    try:
+        print(f"\n[Backtest] Starting {symbol} — Lite + Pro in parallel…")
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            v2_fut = pool.submit(backtest_multi_strategy, symbol,
+                                 cache_dir=CACHE_DIR, version='v2', progress_cb=v2_cb)
+            v3_fut = None
+            if HAS_LGBM:
+                v3_fut = pool.submit(backtest_multi_strategy, symbol,
+                                     cache_dir=CACHE_DIR, version='v3', progress_cb=v3_cb)
+
+            # Collect results (re-raises exceptions from threads)
+            try:
+                v2_result = v2_fut.result()
+            except Exception as e:
+                print(f"[Backtest] V2 failed for {symbol}: {e}")
+                v2_result = None
+
+            v3_result = None
+            if v3_fut:
+                try:
+                    v3_result = v3_fut.result()
+                except Exception as e:
+                    print(f"[Backtest] V3 failed for {symbol}: {e}")
+                    v3_result = None
+                # Discard if V3 fell back to V2 (no LightGBM)
+                if v3_result and v3_result.get('version') == 'v2':
+                    v3_result = None
+
+        if not v2_result and not v3_result:
+            with _bt_lock:
+                _bt_cache[symbol] = {'status': 'error', 'error': 'No data available for backtest'}
+            return
+
+        # Use available dates (both should match, trim to shorter if not)
+        primary = v2_result or v3_result
+        dates = primary['dates']
+        if v2_result and v3_result:
+            min_len = min(len(v2_result['dates']), len(v3_result['dates']))
+            dates = v2_result['dates'][:min_len]
+            for key in ('buyhold',):
+                v2_result[key] = v2_result[key][:min_len]
+                v3_result[key] = v3_result[key][:min_len]
+            for key in ('full', 'buy_only'):
+                v2_result[key]['portfolio'] = v2_result[key]['portfolio'][:min_len]
+                v3_result[key]['portfolio'] = v3_result[key]['portfolio'][:min_len]
+
+        start_date = primary.get('start_date') or (dates[0] if dates else None)
+
+        result = {
+            'symbol': symbol,
+            'start_date': start_date,
+            'dates': dates,
+            'period_days': len(dates),
+            'strategies': {
+                'buyhold': {
+                    'portfolio': primary['buyhold'][:len(dates)],
+                    **primary['buyhold_stats'],
+                },
+                'lite_buyonly': v2_result['buy_only'] if v2_result else None,
+                'lite_full': v2_result['full'] if v2_result else None,
+                'pro_buyonly': v3_result['buy_only'] if v3_result else None,
+                'pro_full': v3_result['full'] if v3_result else None,
+            },
+        }
+
+        # Save to disk cache
+        _ensure_cache_dir(CACHE_DIR)
+        cache_path = os.path.join(CACHE_DIR, f"backtest_chart_{symbol}.json")
+        with open(cache_path, 'w') as f:
+            json.dump(result, f)
+
+        with _bt_lock:
+            _bt_cache[symbol] = {'status': 'done', 'data': result}
+        print(f"[Backtest] {symbol} complete.\n")
+
+    except Exception as e:
+        print(f"[Backtest ERROR] {symbol}: {e}")
+        import traceback; traceback.print_exc()
+        with _bt_lock:
+            _bt_cache[symbol] = {'status': 'error', 'error': str(e)}
+    finally:
+        with _bt_lock:
+            _bt_progress.pop(symbol, None)
+
+
+@app.get("/api/backtest-chart/{symbol}")
+async def api_backtest_chart(symbol: str, refresh: bool = False):
+    """
+    Walk-forward backtest comparison chart data.
+    Returns equity curves for 5 strategies: B&H, Lite Buy-Only, Lite Full, Pro Buy-Only, Pro Full.
+    First request triggers background computation; poll until status='done'.
+    Results cached to disk for 7 days.
+    """
+    symbol = symbol.upper().strip()
+    if not symbol.isalnum() or len(symbol) > 6:
+        raise HTTPException(400, "Invalid ticker symbol")
+
+    # Check in-memory cache
+    with _bt_lock:
+        cached = _bt_cache.get(symbol)
+
+    if cached and not refresh:
+        if cached['status'] == 'done':
+            return JSONResponse({'status': 'done', **cached['data']})
+        elif cached['status'] == 'running':
+            with _bt_lock:
+                prog = dict(_bt_progress.get(symbol, {}))  # snapshot under lock
+            parts = []
+            if 'v2' in prog:
+                parts.append(f'Lite: retrain {prog["v2"]}')
+            if 'v3' in prog:
+                parts.append(f'Pro: retrain {prog["v3"]}')
+            return JSONResponse({
+                'status': 'running', 'symbol': symbol,
+                'progress': ' | '.join(parts) if parts else 'Starting\u2026',
+            })
+        elif cached['status'] == 'error':
+            # Clear error so user can retry
+            with _bt_lock:
+                _bt_cache.pop(symbol, None)  # safe pop instead of del
+            return JSONResponse({'status': 'error', 'error': cached.get('error', 'Unknown error')})
+
+    # Check disk cache (valid for 7 days)
+    if not refresh:
+        cache_path = os.path.join(CACHE_DIR, f"backtest_chart_{symbol}.json")
+        if os.path.exists(cache_path):
+            try:
+                age_days = (time.time() - os.path.getmtime(cache_path)) / 86400
+                if age_days < 7:
+                    with open(cache_path) as f:
+                        data = json.load(f)
+                    with _bt_lock:
+                        _bt_cache[symbol] = {'status': 'done', 'data': data}
+                    return JSONResponse({'status': 'done', **data})
+            except Exception:
+                pass
+
+    # Start background computation (thread spawned inside lock to prevent duplicates)
+    with _bt_lock:
+        already_running = _bt_cache.get(symbol, {}).get('status') == 'running'
+        if not already_running:
+            _bt_cache[symbol] = {'status': 'running'}
+            thread = threading.Thread(target=_run_backtest_chart, args=(symbol,), daemon=True)
+            thread.start()
+
+    return JSONResponse({'status': 'running', 'symbol': symbol})
+
+
+# ─── Backtest Library (batch runner + summary) ───
+
+_batch_state = {
+    "is_running": False,
+    "total": 0,
+    "completed": 0,
+    "current_symbol": None,
+    "completed_symbols": [],
+    "failed_symbols": [],
+    "skipped_cached": 0,
+    "started_at": None,
+    "error": None,
+}
+_batch_lock = threading.Lock()
+
+BACKTEST_CACHE_TTL_DAYS = 7
+
+
+def _run_backtest_batch():
+    """Background: run backtests for all uncached symbols sequentially."""
+    try:
+        all_syms = get_all_symbols()
+        to_run = []
+        already_cached = []
+        for sym in all_syms:
+            path = os.path.join(CACHE_DIR, f"backtest_chart_{sym}.json")
+            if os.path.exists(path):
+                try:
+                    age = (time.time() - os.path.getmtime(path)) / 86400
+                    if age < BACKTEST_CACHE_TTL_DAYS:
+                        already_cached.append(sym)
+                        continue
+                except Exception:
+                    pass
+            to_run.append(sym)
+
+        with _batch_lock:
+            _batch_state["total"] = len(to_run)
+            _batch_state["completed"] = 0
+            _batch_state["current_symbol"] = None
+            _batch_state["skipped_cached"] = len(already_cached)
+
+        print(f"\n[Batch] Starting backtest batch — {len(to_run)} symbols to run, "
+              f"{len(already_cached)} already cached.")
+
+        for i, sym in enumerate(to_run):
+            with _batch_lock:
+                _batch_state["current_symbol"] = sym
+            try:
+                print(f"[Batch] [{i+1}/{len(to_run)}] {sym}…")
+                _run_backtest_chart(sym)
+                # _run_backtest_chart catches its own exceptions, so check result
+                with _bt_lock:
+                    result_status = _bt_cache.get(sym, {}).get('status')
+                with _batch_lock:
+                    _batch_state["completed"] = i + 1
+                    if result_status == 'done':
+                        _batch_state["completed_symbols"].append(sym)
+                    else:
+                        err = 'internal error'
+                        with _bt_lock:
+                            err = _bt_cache.get(sym, {}).get('error', err)
+                        print(f"[Batch] {sym} failed internally: {err}")
+                        _batch_state["failed_symbols"].append(sym)
+            except Exception as e:
+                print(f"[Batch] {sym} failed: {e}")
+                with _batch_lock:
+                    _batch_state["completed"] = i + 1
+                    _batch_state["failed_symbols"].append(sym)
+
+        with _batch_lock:
+            succeeded = len(_batch_state['completed_symbols'])
+            failed = len(_batch_state['failed_symbols'])
+        print(f"[Batch] Complete — {succeeded} succeeded, {failed} failed.\n")
+
+    except Exception as e:
+        print(f"[Batch] FATAL ERROR: {e}")
+        import traceback; traceback.print_exc()
+        with _batch_lock:
+            _batch_state["error"] = str(e)
+    finally:
+        with _batch_lock:
+            _batch_state["is_running"] = False
+            _batch_state["current_symbol"] = None
+
+
+def _load_library_summary():
+    """Scan disk cache and build lightweight summary (no portfolio arrays)."""
+    all_syms = get_all_symbols()
+    items = []
+    strat_keys = ['buyhold', 'lite_buyonly', 'lite_full', 'pro_buyonly', 'pro_full']
+
+    for sym in all_syms:
+        path = os.path.join(CACHE_DIR, f"backtest_chart_{sym}.json")
+        if not os.path.exists(path):
+            continue
+        try:
+            age_days = (time.time() - os.path.getmtime(path)) / 86400
+            if age_days >= BACKTEST_CACHE_TTL_DAYS:
+                continue
+            with open(path) as f:
+                data = json.load(f)
+            # Build summary — strip large arrays
+            strats = {}
+            best_sharpe = -999
+            best_strat = None
+            for sk in strat_keys:
+                s = data.get('strategies', {}).get(sk)
+                if s:
+                    info = {
+                        'return_pct': s.get('return_pct'),
+                        'sharpe': s.get('sharpe'),
+                        'max_drawdown': s.get('max_drawdown'),
+                        'buys': s.get('buys', 0),
+                        'sells': s.get('sells', 0),
+                    }
+                    strats[sk] = info
+                    if info['sharpe'] is not None and info['sharpe'] > best_sharpe:
+                        best_sharpe = info['sharpe']
+                        best_strat = sk
+            items.append({
+                'symbol': data.get('symbol', sym),
+                'start_date': data.get('start_date'),
+                'period_days': data.get('period_days'),
+                'strategies': strats,
+                'best_sharpe_strategy': best_strat,
+                'best_sharpe_value': round(best_sharpe, 2) if best_sharpe > -999 else None,
+                'cache_age_hours': round(age_days * 24, 1),
+            })
+        except Exception as e:
+            print(f"[Library] Error loading {sym}: {e}")
+    return items
+
+
+_STRATEGY_LABELS = {
+    'buyhold': 'Buy & Hold',
+    'lite_buyonly': 'Lite Buy-Only',
+    'lite_full': 'Lite Full Signal',
+    'pro_buyonly': 'Pro Buy-Only',
+    'pro_full': 'Pro Full Signal',
+}
+
+def _get_best_strategy_map():
+    """Quick lookup: symbol → best strategy info from cached backtest results."""
+    result = {}
+    items = _load_library_summary()
+    for item in items:
+        sk = item.get('best_sharpe_strategy')
+        if sk:
+            result[item['symbol']] = {
+                'key': sk,
+                'name': _STRATEGY_LABELS.get(sk, sk),
+                'sharpe': item.get('best_sharpe_value'),
+            }
+    return result
+
+
+@app.get("/api/backtest-library")
+async def api_backtest_library():
+    """Summary stats for all cached backtests (no portfolio arrays)."""
+    all_syms = get_all_symbols()
+    items = _load_library_summary()
+    with _batch_lock:
+        batch_running = _batch_state["is_running"]
+    return JSONResponse({
+        "status": "ok",
+        "symbols_total": len(all_syms),
+        "symbols_cached": len(items),
+        "batch_running": batch_running,
+        "data": items,
+    })
+
+
+@app.post("/api/backtest-batch")
+async def api_backtest_batch():
+    """Trigger batch backtest for all uncached symbols."""
+    with _batch_lock:
+        if _batch_state["is_running"]:
+            return JSONResponse({
+                "status": "batch_in_progress",
+                "completed": _batch_state["completed"],
+                "total": _batch_state["total"],
+                "current_symbol": _batch_state["current_symbol"],
+            })
+        # Count cached BEFORE starting thread so we can pre-set total
+        all_syms = get_all_symbols()
+        cached = 0
+        for sym in all_syms:
+            path = os.path.join(CACHE_DIR, f"backtest_chart_{sym}.json")
+            if os.path.exists(path):
+                try:
+                    age = (time.time() - os.path.getmtime(path)) / 86400
+                    if age < BACKTEST_CACHE_TTL_DAYS:
+                        cached += 1
+                except Exception:
+                    pass
+        to_run = len(all_syms) - cached
+
+        # Initialize ALL state before starting thread to avoid race conditions
+        _batch_state["is_running"] = True
+        _batch_state["total"] = to_run
+        _batch_state["completed"] = 0
+        _batch_state["current_symbol"] = None
+        _batch_state["completed_symbols"] = []
+        _batch_state["failed_symbols"] = []
+        _batch_state["skipped_cached"] = cached
+        _batch_state["started_at"] = time.time()
+        _batch_state["error"] = None
+
+    thread = threading.Thread(target=_run_backtest_batch, daemon=True)
+    thread.start()
+
+    return JSONResponse({
+        "status": "batch_started",
+        "symbols_total": len(all_syms),
+        "already_cached": cached,
+        "to_run": to_run,
+    })
+
+
+@app.get("/api/backtest-batch/status")
+async def api_backtest_batch_status():
+    """Poll batch backtest progress."""
+    with _batch_lock:
+        snap = dict(_batch_state)
+        snap["completed_symbols"] = list(snap["completed_symbols"])
+        snap["failed_symbols"] = list(snap["failed_symbols"])
+    # Add per-symbol progress if running
+    current_prog = None
+    if snap["current_symbol"]:
+        with _bt_lock:
+            prog = dict(_bt_progress.get(snap["current_symbol"], {}))
+        parts = []
+        if 'v2' in prog:
+            parts.append(f'Lite: {prog["v2"]}')
+        if 'v3' in prog:
+            parts.append(f'Pro: {prog["v3"]}')
+        current_prog = ' | '.join(parts) if parts else None
+    elapsed = round(time.time() - snap["started_at"]) if snap["started_at"] else 0
+    return JSONResponse({
+        "status": "running" if snap["is_running"] else "done",
+        "total": snap["total"],
+        "completed": snap["completed"],
+        "skipped_cached": snap.get("skipped_cached", 0),
+        "current_symbol": snap["current_symbol"],
+        "current_progress": current_prog,
+        "completed_symbols": snap["completed_symbols"],
+        "failed_symbols": snap["failed_symbols"],
+        "elapsed_seconds": elapsed,
+        "error": snap.get("error"),
     })
 
 
