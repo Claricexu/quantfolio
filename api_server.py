@@ -29,6 +29,13 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
+# Load .env (if present) before any os.environ reads below.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv is optional — env vars still work without it
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -74,17 +81,18 @@ HOST = "0.0.0.0"
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")
 
 # =============================================================================
-# EMAIL ALERTS — set these to enable notifications after daily report
+# EMAIL ALERTS — configured via .env (see .env.example)
 # =============================================================================
 # To use Gmail: go to https://myaccount.google.com/apppasswords and generate
-# an App Password (requires 2-Step Verification enabled). Use that as SMTP_PASSWORD.
-SMTP_ENABLED  = True                       # flip to True once configured
-SMTP_SERVER   = "smtp.gmail.com"
-SMTP_PORT     = 587
-SMTP_USER     = "xkxuqian@gmail.com"      # your Gmail address
-SMTP_PASSWORD = "wdah styg ayns yhaa"       # Gmail App Password (16 chars, spaces ok)
-ALERT_TO      = ["xkxuqian@gmail.com", "xu.withoutwax@gmail.com"]    # list of recipients, can add multiple: ["you@gmail.com", "partner@gmail.com"]
-ALERT_SUBJECT = "Quantfolio Signal Brief"
+# an App Password (requires 2-Step Verification enabled). Put it in SMTP_PASSWORD
+# in your local .env file — do NOT hardcode here.
+SMTP_ENABLED  = os.environ.get("SMTP_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
+SMTP_SERVER   = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
+SMTP_PORT     = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER     = os.environ.get("SMTP_USER", "")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+ALERT_TO      = [e.strip() for e in os.environ.get("ALERT_TO", "").split(",") if e.strip()]
+ALERT_SUBJECT = os.environ.get("ALERT_SUBJECT", "Quantfolio Signal Brief")
 
 
 def _send_signal_alerts(report):

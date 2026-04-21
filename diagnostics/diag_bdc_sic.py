@@ -25,11 +25,17 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.request
 from pathlib import Path
 
-UA = "Quantfolio-Phase1.9b-Diagnostic xu.withoutwax@gmail.com"
+# SEC requires an identifying User-Agent with a real contact email.
+# Configure SEC_USER_AGENT in your .env (see .env.example).
+UA = os.environ.get(
+    "SEC_USER_AGENT",
+    "Quantfolio-Phase1.9b-Diagnostic quantfolio-user@example.com",
+)
 SLEEP = 0.6
 
 # 3 BDCs with known blank SIC in our universe_raw.csv + 1 anchor

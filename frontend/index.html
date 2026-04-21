@@ -513,6 +513,71 @@ function testDot(pass) {
   return '<span style="color:var(--text-ghost);font-size:14px">\u2013</span>';
 }
 
+// Roll up SEC SIC codes into ~9 broad buckets (GICS-ish). SIC descriptions
+// like "Aircraft Engines & Engine Parts" are too granular for a filter;
+// this collapses them to "Industrials" etc. Fallback keeps the raw string
+// if SIC is missing (e.g., ETFs/ADRs with no SEC filing).
+function broadSector(sic, fallback) {
+  const s = parseInt(sic, 10);
+  if (!s) return fallback ? fallback.toString().slice(0, 30) : '\u2014';
+  if (s >= 2830 && s <= 2839) return 'Health Care';             // Pharma
+  if (s >= 3570 && s <= 3579) return 'Technology';              // Computers
+  if (s >= 3600 && s <= 3699) return 'Technology';              // Electronics / semis
+  if (s >= 3710 && s <= 3716) return 'Consumer Discretionary';  // Autos
+  if (s >= 3800 && s <= 3859) return 'Health Care';             // Medical devices
+  if (s >= 3860 && s <= 3899) return 'Technology';              // Instruments
+  if (s >= 7370 && s <= 7379) return 'Technology';              // Software / IT
+  if (s >= 8000 && s <= 8099) return 'Health Care';             // Health services
+  if (s === 5411) return 'Consumer Staples';                    // Grocery
+  const g = Math.floor(s / 100);
+  if (g <= 9)                  return 'Agriculture';
+  if (g <= 14)                 return 'Energy & Materials';
+  if (g <= 17)                 return 'Industrials';
+  if (g <= 21)                 return 'Consumer Staples';
+  if (g <= 23)                 return 'Consumer Discretionary';
+  if (g <= 28)                 return 'Materials';
+  if (g === 29)                return 'Energy & Materials';
+  if (g <= 34)                 return 'Materials';
+  if (g === 35 || g === 37)    return 'Industrials';
+  if (g === 36 || g === 38)    return 'Technology';
+  if (g === 39)                return 'Consumer Discretionary';
+  if (g >= 40 && g <= 47)      return 'Industrials';
+  if (g === 48)                return 'Communication Services';
+  if (g === 49)                return 'Utilities';
+  if (g >= 50 && g <= 51)      return 'Consumer Discretionary';
+  if (g === 54)                return 'Consumer Staples';
+  if (g >= 52 && g <= 59)      return 'Consumer Discretionary';
+  if (g >= 60 && g <= 64)      return 'Financials';
+  if (g === 65)                return 'Real Estate';
+  if (g >= 66 && g <= 67)      return 'Financials';
+  if (g >= 70 && g <= 72)      return 'Consumer Discretionary';
+  if (g === 73)                return 'Industrials';            // Non-software business services
+  if (g === 78 || g === 79)    return 'Communication Services';
+  if (g >= 75 && g <= 76)      return 'Consumer Discretionary';
+  if (g >= 80 && g <= 89)      return 'Industrials';
+  return fallback ? fallback.toString().slice(0, 30) : '\u2014';
+}
+
+// Archetype-aware test-row definitions. Keys MUST match what
+// fundamental_screener.py emits in m['tests'] for each archetype
+// (GROWTH_TESTS / MATURE_TESTS).
+const TEST_DEFS_BY_ARCHETYPE = {
+  GROWTH: [
+    ['Growth',       'growth_rate'],
+    ['Unit Econ',    'unit_economics'],
+    ['Profit Path',  'path_to_profits'],
+    ['Moat',         'moat'],
+    ['Capital Eff.', 'capital_efficiency'],
+  ],
+  MATURE: [
+    ['Stable',    'not_declining'],
+    ['Margins',   'margin_quality'],
+    ['Cash',      'cash_generation'],
+    ['Moat',      'moat'],
+    ['Stability', 'stability'],
+  ],
+};
+
 // ── Archetype (Path A) — company profile tag read alongside the verdict ──
 function archetypeLabel(a) {
   return ({
@@ -558,16 +623,12 @@ function buildVerdictCard(v) {
   const tests = v.tests || {};
   const flags = v.dealbreakers || {};
 
-  const testRow = [
-    ['Growth',       tests.growth],
-    ['Business',     tests.business_model],
-    ['Profit',       tests.profitability],
-    ['Moat',         tests.moat],
-    ['Capital Eff.', tests.capital_efficiency],
-  ].map(([l,p]) => `
+  const archetypeKey = (v.archetype || '').toUpperCase();
+  const testDefs = TEST_DEFS_BY_ARCHETYPE[archetypeKey] || TEST_DEFS_BY_ARCHETYPE.GROWTH;
+  const testRow = testDefs.map(([l, key]) => `
     <div style="display:flex;flex-direction:column;align-items:center;gap:4px;min-width:70px">
       <div style="font-size:10px;color:var(--text-dim);letter-spacing:0.5px">${l}</div>
-      ${testDot(p)}
+      ${testDot(tests[key])}
     </div>`).join('');
 
   const flagChips = Object.entries(flags).filter(([,f]) => f).map(([k]) => {
@@ -590,7 +651,7 @@ function buildVerdictCard(v) {
     ['SVR vs Sector',        v.svr_vs_sector_median != null ? v.svr_vs_sector_median.toFixed(2)+'x' : '\u2014'],
     ['Sector Rank',          v.market_cap_rank_in_sector != null ? ('#'+v.market_cap_rank_in_sector+(v.sector_peers ? ' of '+v.sector_peers : '')) : '\u2014'],
     ['Shares 3Y Growth',     fmtPct(v.shares_growth_3y)],
-    ['Sector',               (v.sector || '\u2014').toString().slice(0, 40)],
+    ['Sector',               broadSector(v.sic, v.sector)],
   ];
   const rowsHTML = rows.map(([l,val]) => `
     <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 10px;border-bottom:1px solid var(--border)">
@@ -2004,7 +2065,7 @@ async function loadLeaders(force=false) {
 }
 
 function _rowSector(r) {
-  return (r.sector || r.sic_description || r.sic || '').toString().trim();
+  return broadSector(r.sic, r.sector || r.sic_description || '');
 }
 
 function populateSectorDropdown() {

@@ -20,6 +20,7 @@ Read-only; no DB writes, one HTTP GET.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 import urllib.request
@@ -27,7 +28,13 @@ import urllib.request
 # CRWD's CIK, zero-padded to 10 digits per SEC convention
 CIK = "0001535527"
 URL = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{CIK}.json"
-UA = "Quantfolio-Phase1.9-Diagnostic xu.withoutwax@gmail.com"
+
+# SEC requires an identifying User-Agent with a real contact email.
+# Configure SEC_USER_AGENT in your .env (see .env.example).
+UA = os.environ.get(
+    "SEC_USER_AGENT",
+    "Quantfolio-Phase1.9-Diagnostic quantfolio-user@example.com",
+)
 
 
 def _fmt(v):

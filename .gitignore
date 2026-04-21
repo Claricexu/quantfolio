@@ -33,3 +33,8 @@ Thumbs.db
 .idea/
 
 .claude/settings.local.json
+
+# Local secrets — never commit
+.env
+.env.local
+.env.*.local

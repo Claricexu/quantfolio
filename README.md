@@ -151,7 +151,23 @@ Full rubric + rationale + Phase 2 backlog: see [`good_firm_framework.md`](good_f
 pip install -r requirements.txt
 ```
 
-### 2. Launch
+### 2. Configure `.env` (optional but recommended)
+
+Copy `.env.example` → `.env` and fill in the values you need. `.env` is gitignored; it never leaves your machine.
+
+```bash
+cp .env.example .env
+# then edit .env in your editor of choice
+```
+
+| Variable | What it does |
+|---|---|
+| `SMTP_ENABLED`, `SMTP_USER`, `SMTP_PASSWORD`, `ALERT_TO` | Email alerts after each 4:05 PM scan. For Gmail, use an App Password from https://myaccount.google.com/apppasswords. Leave `SMTP_ENABLED=false` to skip. |
+| `SEC_USER_AGENT`, `SEC_CONTACT_EMAIL` | SEC EDGAR requires a real contact email in the User-Agent header for the Leader Detector pipeline. Without this, SEC will rate-limit or block you. |
+
+End users: see [USER_GUIDE.md](USER_GUIDE.md) Part 1, Step 4 for a non-technical walkthrough.
+
+### 3. Launch
 
 **Windows** — Double-click `start_dashboard.bat`
 
@@ -160,7 +176,7 @@ pip install -r requirements.txt
 python api_server.py
 ```
 
-### 3. Open browser
+### 4. Open browser
 
 Navigate to **http://localhost:8000**
 

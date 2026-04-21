@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import re
 import sqlite3
 import time
@@ -45,7 +46,12 @@ ROOT = Path(__file__).parent
 DB_PATH = ROOT / 'fundamentals.db'
 CSV_PATH = ROOT / 'screener_results.csv'
 
-UA = "Quantfolio-Phase1.9b-Diagnostic xu.withoutwax@gmail.com"
+# SEC requires an identifying User-Agent with a real contact email.
+# Configure SEC_USER_AGENT in your .env (see .env.example).
+UA = os.environ.get(
+    "SEC_USER_AGENT",
+    "Quantfolio-Phase1.9b-Diagnostic quantfolio-user@example.com",
+)
 SLEEP_BETWEEN_CALLS = 0.6  # SEC fair-use floor
 
 # Mirror of edgar_fetcher.XBRL_TAG_CHAINS['Revenue'] post-1.9b patch.

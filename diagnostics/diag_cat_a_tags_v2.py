@@ -34,6 +34,7 @@ Read-only; one HTTP GET per ticker (0.6s rate-limit floor).
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -45,7 +46,12 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).parent / 'fundamentals.db'
 
-UA = "Quantfolio-Phase1.9b-Diagnostic xu.withoutwax@gmail.com"
+# SEC requires an identifying User-Agent with a real contact email.
+# Configure SEC_USER_AGENT in your .env (see .env.example).
+UA = os.environ.get(
+    "SEC_USER_AGENT",
+    "Quantfolio-Phase1.9b-Diagnostic quantfolio-user@example.com",
+)
 SLEEP_BETWEEN_CALLS = 0.6
 
 DEFAULT_TICKERS = ['VLO', 'APA', 'FSLY', 'CUK']

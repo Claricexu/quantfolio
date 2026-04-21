@@ -62,7 +62,42 @@ If it's already on your computer, skip to Step 3.
 4. Wait a few minutes. You'll see a lot of text — that's normal.
 5. When it's done and you see the prompt again, you're ready.
 
-That's it. You never have to do Steps 1-3 again unless you move to a new computer.
+### Step 4: Configure email alerts and SEC contact (optional but recommended)
+
+Quantfolio uses a file called `.env` to store local settings like your email password. It's private to your computer and never uploaded to GitHub. Two things can go in there:
+
+1. **Email alerts** — so Quantfolio can email you HIGH-confidence BUY/SELL signals after each 4:05 PM scan.
+2. **SEC contact email** — so the Leader Detector can politely identify itself to SEC EDGAR (required by SEC; without a real email, SEC rate-limits the screener).
+
+**How to set it up:**
+
+1. In the Quantfolio folder, find the file `.env.example`. Make a copy of it and rename the copy to `.env` (just `.env`, no extension).
+2. Open `.env` in Notepad or any text editor.
+3. Fill in the values you want.
+
+   **For email alerts (Gmail):**
+   - Go to https://myaccount.google.com/apppasswords — requires 2-Step Verification on your Gmail.
+   - Generate a new App Password called "Quantfolio". You'll get a 16-character string like `abcd efgh ijkl mnop`.
+   - In `.env`, set:
+     ```
+     SMTP_ENABLED=true
+     SMTP_USER=your-email@gmail.com
+     SMTP_PASSWORD=abcd efgh ijkl mnop
+     ALERT_TO=your-email@gmail.com
+     ```
+   - Don't want email alerts? Leave `SMTP_ENABLED=false` and skip the rest of the email fields.
+
+   **For SEC EDGAR contact:**
+   - Put your real email in both `SEC_USER_AGENT` and `SEC_CONTACT_EMAIL`. Example:
+     ```
+     SEC_USER_AGENT=Quantfolio my-email@example.com
+     SEC_CONTACT_EMAIL=my-email@example.com
+     ```
+   - If you skip this, the Leader Detector will use a generic fallback that SEC will rate-limit or block.
+
+4. Save `.env` and close the editor.
+
+That's it. You never have to do Steps 1-4 again unless you move to a new computer.
 
 ---
 
@@ -180,7 +215,7 @@ The Daily Report auto-scans **all 174 symbols** (100 automated leaders plus your
 
 ### Email alerts (optional)
 
-If you've configured SMTP credentials in `api_server.py`, Quantfolio sends you an email called **"Quantfolio Signal Brief"** right after every scheduled 4:05 PM run — but only if there's at least one HIGH-confidence signal.
+If you've configured SMTP credentials in your local `.env` file (see **Part 1, Step 4** for how to set them up), Quantfolio sends you an email called **"Quantfolio Signal Brief"** right after every scheduled 4:05 PM run — but only if there's at least one HIGH-confidence signal.
 
 The email includes:
 - All HIGH-confidence BUYs
