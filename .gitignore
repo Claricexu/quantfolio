@@ -1,26 +1,33 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
+# Generated databases
+*.db
+fundamentals.db
 
-# Jupyter
+# Checkpoint files and caches
+.universe*checkpoint*.csv
 .ipynb_checkpoints/
-*.ipynb
-
-# Data (auto-downloaded at runtime)
 data_cache/
 
-# Backtest output images
-*.png
+# Screener and backtest outputs
+leaders.csv
+screener_results.csv
+universe_raw.csv
+universe_prescreened.csv
+quick_test_*.csv
+threshold_sensitivity.csv
+momentum_chaser_*.csv
 
-# Intermediate model versions
-finance_model_v3_advanced.py
+# Diagnostic JSON outputs
+diagnostics/diag_*.json
+diag_*.json
 
-# OS files
+# Python runtime
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS and editor
 .DS_Store
 Thumbs.db
-desktop.ini
-
-# IDE
 .vscode/
 .idea/

@@ -22,6 +22,9 @@ import os
 import json
 import time
 import threading
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -47,6 +50,21 @@ from finance_model_v2 import (
     _ensure_cache_dir,
 )
 
+# ─── Optional: fundamental screener (Good Firm Framework) ────────────────────
+# Loads edgar_fetcher + fundamental_screener. Failure here does NOT affect the
+# three existing tabs — endpoints below simply return 503 if unavailable.
+try:
+    from fundamental_screener import run_full_screen as _screener_run_full
+    from edgar_fetcher import (
+        fetch_all as _edgar_fetch_all,
+        get_db as _edgar_get_db,
+        load_tickers_from_csv as _edgar_load_tickers,
+    )
+    HAS_SCREENER = True
+except Exception as _screener_err:
+    print(f"[Screener] Not available: {_screener_err}")
+    HAS_SCREENER = False
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -54,6 +72,175 @@ from finance_model_v2 import (
 PORT = 8000
 HOST = "0.0.0.0"
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")
+
+# =============================================================================
+# EMAIL ALERTS — set these to enable notifications after daily report
+# =============================================================================
+# To use Gmail: go to https://myaccount.google.com/apppasswords and generate
+# an App Password (requires 2-Step Verification enabled). Use that as SMTP_PASSWORD.
+SMTP_ENABLED  = True                       # flip to True once configured
+SMTP_SERVER   = "smtp.gmail.com"
+SMTP_PORT     = 587
+SMTP_USER     = "xkxuqian@gmail.com"      # your Gmail address
+SMTP_PASSWORD = "wdah styg ayns yhaa"       # Gmail App Password (16 chars, spaces ok)
+ALERT_TO      = ["xkxuqian@gmail.com", "xu.withoutwax@gmail.com"]    # list of recipients, can add multiple: ["you@gmail.com", "partner@gmail.com"]
+ALERT_SUBJECT = "Quantfolio Signal Brief"
+
+
+def _send_signal_alerts(report):
+    """After a dual report completes, email any HIGH-confidence BUY or SELL signals."""
+    if not SMTP_ENABLED:
+        return
+    if not report or 'data' not in report:
+        return
+
+    # Filter: both models agree on BUY or SELL (confidence == HIGH)
+    alerts = [
+        r for r in report['data']
+        if r.get('confidence') == 'HIGH' and r.get('consensus_signal') in ('BUY', 'SELL')
+    ]
+    if not alerts:
+        print("[Alert] No high-confidence signals today — no email sent.")
+        return
+
+    # Check early if we'll have anything to send (sells get filtered later)
+    raw_buys = [a for a in alerts if a['consensus_signal'] == 'BUY']
+    raw_sells = [a for a in alerts if a['consensus_signal'] == 'SELL']
+    if not raw_buys and not raw_sells:
+        print("[Alert] No high-confidence signals today — no email sent.")
+        return
+
+    # Build email body
+    date_str = datetime.now().strftime('%B %d, %Y')
+    buys  = [a for a in alerts if a['consensus_signal'] == 'BUY']
+
+    # Look up best strategies from backtest library
+    best_map = _get_best_strategy_map()
+
+    # SELL: only include tickers whose best strategy is Full Signal
+    # (Buy-Only and Buy & Hold strategies don't use SELL signals)
+    _full_keys = ('lite_full', 'pro_full')
+    sells = [
+        a for a in alerts
+        if a['consensus_signal'] == 'SELL'
+        and best_map.get(a['symbol'], {}).get('key') in _full_keys
+    ]
+
+    def _best_str(sym):
+        b = best_map.get(sym)
+        return b['name'] if b else ''
+
+    def _svr_str(a):
+        svr = a.get('svr')
+        return f"{svr:.1f}x" if svr is not None else ''
+
+    # Plain text version
+    lines = [f"Quantfolio Signal Brief — {date_str}", "=" * 50, ""]
+    if buys:
+        lines.append(f"BUY SIGNALS ({len(buys)}):")
+        lines.append("-" * 60)
+        for a in buys:
+            v2c = a['v2']['pct_change'] if a.get('v2') else 0
+            v3c = a['v3']['pct_change'] if a.get('v3') else 0
+            bs = _best_str(a['symbol'])
+            sv = _svr_str(a)
+            lines.append(f"  {a['symbol']:<6}  Price: ${a['current_price']:<10}  "
+                         f"Lite: {v2c:+.2f}%  Pro: {v3c:+.2f}%"
+                         f"{'  Best: ' + bs if bs else ''}"
+                         f"{'  SVR: ' + sv if sv else ''}")
+        lines.append("")
+    if sells:
+        lines.append(f"SELL SIGNALS ({len(sells)}):")
+        lines.append("-" * 60)
+        for a in sells:
+            v2c = a['v2']['pct_change'] if a.get('v2') else 0
+            v3c = a['v3']['pct_change'] if a.get('v3') else 0
+            bs = _best_str(a['symbol'])
+            sv = _svr_str(a)
+            lines.append(f"  {a['symbol']:<6}  Price: ${a['current_price']:<10}  "
+                         f"Lite: {v2c:+.2f}%  Pro: {v3c:+.2f}%"
+                         f"{'  Best: ' + bs if bs else ''}"
+                         f"{'  SVR: ' + sv if sv else ''}")
+        lines.append("")
+    # If all sells were filtered and no buys, skip sending
+    if not buys and not sells:
+        filtered = len(raw_sells)
+        print(f"[Alert] {filtered} SELL signal(s) filtered (best strategy not Full Signal) — no email sent.")
+        return
+
+    lines.append(f"Total scanned: {report['summary']['total_symbols']} symbols")
+    lines.append(f"Market sentiment: {report['summary'].get('market_sentiment', 'N/A')}")
+    lines.append("")
+    lines.append("— Quantfolio (auto-generated, do not reply)")
+    text_body = "\n".join(lines)
+
+    # HTML version (nicer in most email clients)
+    def _row(a, color):
+        v2c = a['v2']['pct_change'] if a.get('v2') else 0
+        v3c = a['v3']['pct_change'] if a.get('v3') else 0
+        bs = _best_str(a['symbol'])
+        sv = _svr_str(a)
+        return (f'<tr><td style="padding:6px 12px;font-weight:700">{a["symbol"]}</td>'
+                f'<td style="padding:6px 12px">${a["current_price"]}</td>'
+                f'<td style="padding:6px 12px;color:{color};font-weight:700">'
+                f'{a["consensus_signal"]}</td>'
+                f'<td style="padding:6px 12px">{v2c:+.2f}%</td>'
+                f'<td style="padding:6px 12px">{v3c:+.2f}%</td>'
+                f'<td style="padding:6px 12px;font-size:12px">{bs or "—"}</td>'
+                f'<td style="padding:6px 12px;font-size:12px">{sv or "—"}</td></tr>')
+
+    rows_html = ""
+    for a in buys:
+        rows_html += _row(a, "#22c55e")
+    for a in sells:
+        rows_html += _row(a, "#ef4444")
+
+    html_body = f"""
+    <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;color:#1e293b">
+      <h2 style="color:#0f172a;border-bottom:2px solid #2d8b8b;padding-bottom:8px">
+        Quantfolio Signal Brief — {date_str}
+      </h2>
+      <p style="color:#475569;font-size:14px">
+        <strong>{len(buys)}</strong> BUY and <strong>{len(sells)}</strong> SELL
+        high-confidence signals (both Lite + Pro models agree).
+      </p>
+      <table style="border-collapse:collapse;width:100%;font-size:14px;margin:16px 0">
+        <tr style="background:#f1f5f9;font-weight:600;font-size:12px;text-transform:uppercase;color:#64748b">
+          <th style="padding:8px 12px;text-align:left">Symbol</th>
+          <th style="padding:8px 12px;text-align:left">Price</th>
+          <th style="padding:8px 12px;text-align:left">Signal</th>
+          <th style="padding:8px 12px;text-align:left">Lite</th>
+          <th style="padding:8px 12px;text-align:left">Pro</th>
+          <th style="padding:8px 12px;text-align:left">Best Strategy</th>
+          <th style="padding:8px 12px;text-align:left">SVR</th>
+        </tr>
+        {rows_html}
+      </table>
+      <p style="color:#94a3b8;font-size:12px;margin-top:24px">
+        Scanned {report['summary']['total_symbols']} symbols &bull;
+        Sentiment: {report['summary'].get('market_sentiment', 'N/A')} &bull;
+        Auto-generated by Quantfolio
+      </p>
+    </div>"""
+
+    # Send
+    subject = f"{ALERT_SUBJECT} — {len(buys)} BUY, {len(sells)} SELL ({date_str})"
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = SMTP_USER
+        msg["To"]      = ", ".join(ALERT_TO)
+        msg.attach(MIMEText(text_body, "plain"))
+        msg.attach(MIMEText(html_body, "html"))
+
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.sendmail(SMTP_USER, ALERT_TO, msg.as_string())
+        print(f"[Alert] Email sent to {', '.join(ALERT_TO)} — {len(buys)} BUY, {len(sells)} SELL.")
+    except Exception as e:
+        print(f"[Alert] Email failed: {e}")
+
 
 # Daily movers cache (in-memory, refreshed on schedule + on-demand)
 _movers_cache = {
@@ -119,7 +306,8 @@ def _run_daily_scan(version=None):
 
 
 def _start_scheduler():
-    """APScheduler: auto-run dual-model daily report after market close."""
+    """APScheduler: auto-run dual-model daily report after market close,
+    plus quarterly Leader Detector rebuild after 10-Q filing season."""
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
         scheduler = BackgroundScheduler()
@@ -133,12 +321,30 @@ def _start_scheduler():
             id='daily_dual_report',
             replace_existing=True,
         )
+        # Quarterly Leader Detector rebuild (Phase 1.0 → 1.4): Feb/May/Aug/Nov
+        # 15 at 2 AM EST. These dates fall ~2 weeks after the typical 10-Q
+        # filing deadline (40 days after quarter-end), so SEC XBRL data for
+        # the most-recent quarter is available. Cold run ~3.5h; warm reruns
+        # (checkpointed + 90-day XBRL TTL) ~10 min. max_instances=1 prevents
+        # overlap if a prior run is still going.
+        scheduler.add_job(
+            _leaders_rebuild_worker,
+            'cron',
+            month='2,5,8,11', day=15,
+            hour=2, minute=0,
+            timezone='US/Eastern',
+            id='quarterly_leader_rebuild',
+            replace_existing=True,
+            max_instances=1,
+        )
         scheduler.start()
         print("[Scheduler] Daily Lite+Pro report → 4:05 PM EST, Mon–Fri (auto after market close).")
+        print("[Scheduler] Quarterly Leader Detector rebuild → Feb/May/Aug/Nov 15 at 2 AM EST.")
     except ImportError:
         print("[Scheduler] apscheduler not installed — no auto-scheduling.")
         print("  Install: pip install apscheduler")
-        print("  Manual trigger: GET /api/report?refresh=true")
+        print("  Manual trigger: GET /api/report?refresh=true  (daily report)")
+        print("  Manual trigger: POST /api/leaders/rebuild     (leader rebuild)")
 
 
 def _load_latest_scan_from_disk():
@@ -227,17 +433,62 @@ async def api_predict(symbol: str, version: str = None, strategy: str = None,
     return JSONResponse(result)
 
 
+def _get_cached_compare_result(symbol):
+    """
+    Fast-path: return the same-day daily-report entry for this symbol if available.
+    Returns a dict copy (with `cached_from_report=True` and `cached_at` metadata)
+    or None if the report is stale / missing / doesn't contain the symbol.
+
+    The daily report runs at 4:05 PM EST and stores full `predict_ticker_compare`
+    results, so we can serve them instantly instead of rebuilding both models.
+    Uses a 22h freshness window — safely covers the next scheduled run.
+    """
+    with _report_lock:
+        gen_at = _report_cache.get("generated_at")
+        data = _report_cache.get("data")
+    if not gen_at or not data:
+        return None
+    try:
+        gen_dt = datetime.fromisoformat(gen_at)
+    except Exception:
+        return None
+    age_hours = (datetime.now() - gen_dt).total_seconds() / 3600
+    if age_hours < 0 or age_hours >= 22:
+        return None
+
+    entries = data.get('data', []) if isinstance(data, dict) else data
+    for entry in entries:
+        if entry.get('symbol') == symbol:
+            hit = dict(entry)
+            hit['cached_from_report'] = True
+            hit['cached_at'] = gen_at
+            return hit
+    return None
+
+
 @app.get("/api/predict-compare/{symbol}")
-async def api_predict_compare(symbol: str, strategy: str = None):
+async def api_predict_compare(symbol: str, strategy: str = None, refresh: bool = False):
     """
     Run BOTH Lite and Pro models on a single ticker.
     Returns side-by-side predictions with consensus signal.
     Query params:
-      ?strategy=auto  — auto (ETF→full, stock→buy_only), full, buy_only
+      ?strategy=auto    — auto (ETF→full, stock→buy_only), full, buy_only
+      ?refresh=true     — bypass same-day report cache, run fresh prediction
     """
     symbol = symbol.upper().strip()
     if not symbol.isalnum() or len(symbol) > 6:
         raise HTTPException(400, "Invalid ticker symbol")
+
+    # Fast-path: if today's daily report already contains this symbol, serve it instantly.
+    # Only applies to the default auto strategy — explicit overrides need fresh compute
+    # since the report was generated with auto strategy selection per symbol.
+    if not refresh and (strategy is None or strategy == 'auto'):
+        cached = _get_cached_compare_result(symbol)
+        if cached is not None:
+            best_map = _get_best_strategy_map()
+            cached['best_strategy'] = best_map.get(symbol)
+            return JSONResponse(cached)
+
     strat = strategy if strategy in ('auto', 'full', 'buy_only') else 'auto'
     try:
         result = predict_ticker_compare(symbol, cache_dir=CACHE_DIR, verbose=False, strategy=strat)
@@ -275,6 +526,8 @@ def _run_dual_report():
                 _report_cache["data"] = report
                 _report_cache["generated_at"] = datetime.now().isoformat()
             print(f"[{datetime.now():%Y-%m-%d %H:%M}] Dual report complete — {report['summary']['total_symbols']} symbols.\n")
+            # Send email alert if any high-confidence signals found
+            _send_signal_alerts(report)
     except Exception as exc:
         print(f"[DUAL REPORT ERROR] {exc}")
     finally:
@@ -708,6 +961,7 @@ def _load_library_summary():
                 'best_sharpe_strategy': best_strat,
                 'best_sharpe_value': round(best_sharpe, 2) if best_sharpe > -999 else None,
                 'cache_age_hours': round(age_days * 24, 1),
+                'cached_date': datetime.fromtimestamp(os.path.getmtime(path)).strftime('%Y-%m-%d'),
             })
         except Exception as e:
             print(f"[Library] Error loading {sym}: {e}")
@@ -830,6 +1084,422 @@ async def api_backtest_batch_status():
         "failed_symbols": snap["failed_symbols"],
         "elapsed_seconds": elapsed,
         "error": snap.get("error"),
+    })
+
+
+# =============================================================================
+# FUNDAMENTAL SCREENER (Good Firm Framework)
+# =============================================================================
+# Additive only: three new endpoints (screener table, single-ticker detail,
+# SEC refresh trigger). Does NOT affect any existing endpoint, scheduler, or
+# cache. If the screener modules are unavailable, endpoints return 503.
+
+_screener_lock = threading.Lock()
+_screener_cache = {
+    "data": None,          # list[dict] of scored tickers
+    "computed_at": None,   # ISO timestamp
+    "is_running": False,
+}
+_SCREENER_TTL_HOURS = 6
+
+_edgar_lock = threading.Lock()
+_edgar_state = {
+    "is_running": False,
+    "total": 0,
+    "completed": 0,
+    "current_symbol": None,
+    "started_at": None,
+    "results": None,
+    "error": None,
+}
+
+
+def _screener_cache_fresh():
+    if not _screener_cache["data"] or not _screener_cache["computed_at"]:
+        return False
+    try:
+        dt = datetime.fromisoformat(_screener_cache["computed_at"])
+    except Exception:
+        return False
+    age_h = (datetime.now() - dt).total_seconds() / 3600.0
+    return age_h < _SCREENER_TTL_HOURS
+
+
+def _screener_compute_sync():
+    """Compute a full screen from the local SQLite cache and store in memory.
+    Fast (~5s) — only reads the DB; does not hit SEC."""
+    with _screener_lock:
+        if _screener_cache["is_running"]:
+            return _screener_cache["data"]
+        _screener_cache["is_running"] = True
+    try:
+        data = _screener_run_full()
+        with _screener_lock:
+            _screener_cache["data"] = data
+            _screener_cache["computed_at"] = datetime.now().isoformat()
+        return data
+    finally:
+        with _screener_lock:
+            _screener_cache["is_running"] = False
+
+
+def _edgar_refresh_worker(symbols):
+    """Background worker: pull latest XBRL facts from SEC for each symbol."""
+    with _edgar_lock:
+        _edgar_state["is_running"] = True
+        _edgar_state["total"] = len(symbols)
+        _edgar_state["completed"] = 0
+        _edgar_state["current_symbol"] = None
+        _edgar_state["started_at"] = time.time()
+        _edgar_state["results"] = None
+        _edgar_state["error"] = None
+    try:
+        conn = _edgar_get_db()
+        results = {'ok': 0, 'skipped': 0, 'not_found': 0, 'no_facts': 0, 'error': 0}
+        from edgar_fetcher import fetch_one as _fetch_one, RATE_LIMIT_SLEEP
+        for sym in symbols:
+            with _edgar_lock:
+                _edgar_state["current_symbol"] = sym
+            try:
+                r = _fetch_one(sym, conn, force=True)
+                results[r] = results.get(r, 0) + 1
+            except Exception as e:
+                print(f"[Edgar] {sym}: {e}")
+                results['error'] += 1
+            with _edgar_lock:
+                _edgar_state["completed"] += 1
+            time.sleep(RATE_LIMIT_SLEEP)
+        conn.close()
+        with _edgar_lock:
+            _edgar_state["results"] = results
+        # Invalidate screener cache so next GET recomputes from fresh SEC data
+        with _screener_lock:
+            _screener_cache["data"] = None
+            _screener_cache["computed_at"] = None
+    except Exception as e:
+        with _edgar_lock:
+            _edgar_state["error"] = str(e)
+    finally:
+        with _edgar_lock:
+            _edgar_state["is_running"] = False
+            _edgar_state["current_symbol"] = None
+
+
+@app.get("/api/screener")
+async def api_screener(refresh: bool = False):
+    """Full Good Firm screener table (all tickers). Cached 6h."""
+    if not HAS_SCREENER:
+        raise HTTPException(503, "Screener module unavailable")
+    if not refresh and _screener_cache_fresh():
+        return JSONResponse({
+            "data": _screener_cache["data"],
+            "computed_at": _screener_cache["computed_at"],
+            "cached": True,
+        })
+    data = _screener_compute_sync()
+    if not data:
+        return JSONResponse({
+            "data": [],
+            "computed_at": datetime.now().isoformat(),
+            "cached": False,
+            "hint": "No fundamentals cached yet — POST /api/screener/refresh to pull SEC data.",
+        })
+    return JSONResponse({
+        "data": data,
+        "computed_at": _screener_cache["computed_at"],
+        "cached": False,
+    })
+
+
+@app.get("/api/screener/{symbol}")
+async def api_screener_symbol(symbol: str, refresh: bool = False):
+    """Single-ticker Good Firm verdict + full 15-metric breakdown."""
+    if not HAS_SCREENER:
+        raise HTTPException(503, "Screener module unavailable")
+    symbol = symbol.upper().strip()
+    if not symbol.isalnum() or len(symbol) > 6:
+        raise HTTPException(400, "Invalid ticker symbol")
+
+    # Use cached full-screen if fresh (has sector context); else recompute once
+    if refresh or not _screener_cache_fresh():
+        _screener_compute_sync()
+    data = _screener_cache.get("data") or []
+    hit = next((m for m in data if m.get('symbol') == symbol), None)
+    if not hit:
+        return JSONResponse({
+            "symbol": symbol,
+            "verdict": "INSUFFICIENT_DATA",
+            "hint": "Ticker not in screener output — may be an ETF/ADR, or run SEC refresh.",
+            "computed_at": _screener_cache.get("computed_at"),
+        })
+    return JSONResponse(hit)
+
+
+@app.post("/api/screener/refresh")
+async def api_screener_refresh():
+    """Trigger a background SEC pull for all tickers in Tickers.csv.
+    Returns 202 with a status URL. Use /api/screener/refresh/status to poll."""
+    if not HAS_SCREENER:
+        raise HTTPException(503, "Screener module unavailable")
+    with _edgar_lock:
+        if _edgar_state["is_running"]:
+            raise HTTPException(409, "Refresh already running")
+    symbols = _edgar_load_tickers()
+    if not symbols:
+        raise HTTPException(500, "Tickers.csv is empty or missing")
+    t = threading.Thread(
+        target=_edgar_refresh_worker, args=(symbols,), daemon=True
+    )
+    t.start()
+    return JSONResponse({
+        "status": "started",
+        "total": len(symbols),
+        "status_url": "/api/screener/refresh/status",
+    }, status_code=202)
+
+
+@app.get("/api/screener/refresh/status")
+async def api_screener_refresh_status():
+    """Poll the SEC-refresh background job."""
+    if not HAS_SCREENER:
+        raise HTTPException(503, "Screener module unavailable")
+    with _edgar_lock:
+        snap = dict(_edgar_state)
+    elapsed = round(time.time() - snap["started_at"]) if snap["started_at"] else 0
+    return JSONResponse({
+        "status": "running" if snap["is_running"] else "done",
+        "total": snap["total"],
+        "completed": snap["completed"],
+        "current_symbol": snap["current_symbol"],
+        "elapsed_seconds": elapsed,
+        "results": snap["results"],
+        "error": snap["error"],
+    })
+
+
+# =============================================================================
+# LEADER DETECTOR (Layer 1 — leaders.csv / universe.csv / rebuild trigger)
+# =============================================================================
+# Four endpoints, all additive — failure here does NOT affect Layer 2:
+#   GET  /api/leaders                 → current leaders.csv as JSON (Phase 1.4 out)
+#   GET  /api/universe?source=...     → ranked 500 / prescreened / raw universe
+#   POST /api/leaders/rebuild         → kick off full Phase 1.0 → 1.4 pipeline
+#   GET  /api/leaders/rebuild/status  → poll background rebuild
+
+_LEADERS_DIR = os.path.dirname(os.path.abspath(__file__))
+_LEADERS_CSV_PATH          = os.path.join(_LEADERS_DIR, "leaders.csv")
+_SCREENER_RESULTS_PATH     = os.path.join(_LEADERS_DIR, "screener_results.csv")
+_UNIVERSE_PRESCREENED_PATH = os.path.join(_LEADERS_DIR, "universe_prescreened.csv")
+_UNIVERSE_RAW_PATH         = os.path.join(_LEADERS_DIR, "universe_raw.csv")
+
+_leaders_lock = threading.Lock()
+_leaders_state = {
+    "is_running": False,
+    "stage": None,          # 'universe_build' | 'sec_fetch' | 'screener' | 'leader_select'
+    "started_at": None,
+    "finished_at": None,
+    "result": None,         # 'ok' on clean completion
+    "error": None,
+    "last_stdout_tail": None,
+}
+
+
+def _read_csv_as_list_of_dicts(path):
+    """Read a CSV as list[dict[str,str]]. Returns [] if missing/empty/unreadable."""
+    if not os.path.exists(path):
+        return []
+    try:
+        if os.path.getsize(path) == 0:
+            return []
+    except OSError:
+        return []
+    try:
+        import csv
+        with open(path, 'r', newline='', encoding='utf-8') as f:
+            return [dict(row) for row in csv.DictReader(f)]
+    except Exception as exc:
+        print(f"[Leaders] Failed to read {path}: {exc}")
+        return []
+
+
+def _file_mtime_iso(path):
+    """Return file mtime as ISO string, or None if missing."""
+    try:
+        return datetime.fromtimestamp(os.path.getmtime(path)).isoformat()
+    except OSError:
+        return None
+
+
+def _leaders_rebuild_worker():
+    """Run the Layer 1 pipeline end-to-end as subprocess stages.
+    Each stage is its own process so a crash in (say) SEC fetch doesn't tank
+    the FastAPI process. Progress is per-stage, not per-ticker."""
+    import subprocess
+    import sys
+    python_exe = sys.executable or "python"
+
+    stages = [
+        # Phases 1.0 + 1.1 (--build runs both): ~130 min cold, <1 min warm (checkpointed)
+        ("universe_build", [python_exe, "universe_builder.py", "--build"]),
+        # Phase 1.2: ~85 min cold for ~500 tickers; ~seconds warm (90-day XBRL TTL)
+        ("sec_fetch", [python_exe, "edgar_fetcher.py",
+                       "--universe", "universe_prescreened.csv"]),
+        # Phase 1.3: ~5 min — reads SQLite, writes flat CSV
+        ("screener", [python_exe, "fundamental_screener.py",
+                      "--universe", "universe_prescreened.csv",
+                      "--csv-out", "screener_results.csv"]),
+        # Phase 1.4: ~1 s — pure-local selection
+        ("leader_select", [python_exe, "leader_selector.py", "--build"]),
+    ]
+
+    with _leaders_lock:
+        _leaders_state["is_running"] = True
+        _leaders_state["started_at"] = time.time()
+        _leaders_state["finished_at"] = None
+        _leaders_state["stage"] = None
+        _leaders_state["result"] = None
+        _leaders_state["error"] = None
+        _leaders_state["last_stdout_tail"] = None
+
+    try:
+        for name, cmd in stages:
+            with _leaders_lock:
+                _leaders_state["stage"] = name
+            print(f"[Leaders] Stage '{name}' starting: {' '.join(cmd)}")
+            # 3-hour per-stage timeout — universe_build can legitimately run ~130 min cold.
+            r = subprocess.run(
+                cmd, cwd=_LEADERS_DIR,
+                capture_output=True, text=True, timeout=10800,
+            )
+            tail = (r.stdout or "")[-500:] + "\n" + (r.stderr or "")[-500:]
+            with _leaders_lock:
+                _leaders_state["last_stdout_tail"] = tail
+            if r.returncode != 0:
+                raise RuntimeError(
+                    f"Stage '{name}' failed (rc={r.returncode}). Tail:\n{tail}"
+                )
+            print(f"[Leaders] Stage '{name}' OK")
+        with _leaders_lock:
+            _leaders_state["result"] = "ok"
+        print("[Leaders] Rebuild complete.")
+    except Exception as exc:
+        print(f"[Leaders] Rebuild failed: {exc}")
+        with _leaders_lock:
+            _leaders_state["error"] = str(exc)
+    finally:
+        with _leaders_lock:
+            _leaders_state["is_running"] = False
+            _leaders_state["finished_at"] = time.time()
+            _leaders_state["stage"] = None
+
+
+@app.get("/api/leaders")
+async def api_leaders():
+    """Current leaders.csv (Phase 1.4 output) as JSON.
+
+    Feeds the Leader Detector UI's "selected leaders" view. Returns an empty
+    list with a hint if Layer 1 hasn't run yet."""
+    data = _read_csv_as_list_of_dicts(_LEADERS_CSV_PATH)
+    if not data:
+        return JSONResponse({
+            "data": [],
+            "count": 0,
+            "last_modified": None,
+            "source": "leaders.csv",
+            "hint": "leaders.csv not found or empty. "
+                    "POST /api/leaders/rebuild to generate.",
+        })
+    return JSONResponse({
+        "data": data,
+        "count": len(data),
+        "last_modified": _file_mtime_iso(_LEADERS_CSV_PATH),
+        "source": "leaders.csv",
+    })
+
+
+@app.get("/api/universe")
+async def api_universe(source: str = "screener"):
+    """Full Layer 1 universe snapshots.
+
+    source=screener    (default) → screener_results.csv (~500 scored, 29 cols)
+    source=prescreened           → universe_prescreened.csv (Phase 1.1 output)
+    source=raw                   → universe_raw.csv (Phase 1.0 output, ~1400 rows)
+    """
+    path_map = {
+        "screener":    _SCREENER_RESULTS_PATH,
+        "prescreened": _UNIVERSE_PRESCREENED_PATH,
+        "raw":         _UNIVERSE_RAW_PATH,
+    }
+    path = path_map.get(source)
+    if not path:
+        raise HTTPException(
+            400, f"Unknown source '{source}'. Valid: {list(path_map)}"
+        )
+    data = _read_csv_as_list_of_dicts(path)
+    return JSONResponse({
+        "data": data,
+        "count": len(data),
+        "source": os.path.basename(path),
+        "last_modified": _file_mtime_iso(path),
+    })
+
+
+@app.post("/api/leaders/rebuild")
+async def api_leaders_rebuild():
+    """Trigger a full Phase 1.0 → 1.4 rebuild in the background.
+    Returns 202 immediately. Poll /api/leaders/rebuild/status for progress.
+
+    Cold ETAs (per stage):
+      universe_build  Phases 1.0+1.1  ~130 min
+      sec_fetch       Phase 1.2       ~85 min
+      screener        Phase 1.3       ~5 min
+      leader_select   Phase 1.4       ~1 s
+    Total cold ~3.5 hours. Warm reruns (checkpointed + 90-day XBRL TTL) ~10 min.
+    """
+    with _leaders_lock:
+        if _leaders_state["is_running"]:
+            raise HTTPException(
+                409, f"Rebuild already running (stage={_leaders_state['stage']})"
+            )
+    t = threading.Thread(target=_leaders_rebuild_worker, daemon=True)
+    t.start()
+    return JSONResponse({
+        "status": "started",
+        "status_url": "/api/leaders/rebuild/status",
+        "estimated_minutes_cold": 215,
+        "estimated_minutes_warm": 10,
+    }, status_code=202)
+
+
+@app.get("/api/leaders/rebuild/status")
+async def api_leaders_rebuild_status():
+    """Poll the background rebuild job.
+    Status transitions: idle → running (with stage) → done | error
+    """
+    with _leaders_lock:
+        snap = dict(_leaders_state)
+    if snap["is_running"]:
+        status = "running"
+    elif snap["error"]:
+        status = "error"
+    elif snap["result"] == "ok":
+        status = "done"
+    else:
+        status = "idle"
+    started, finished = snap["started_at"], snap["finished_at"]
+    if snap["is_running"] and started:
+        elapsed = round(time.time() - started)
+    elif started and finished:
+        elapsed = round(finished - started)
+    else:
+        elapsed = 0
+    return JSONResponse({
+        "status": status,
+        "stage": snap["stage"],
+        "elapsed_seconds": elapsed,
+        "result": snap["result"],
+        "error": snap["error"],
+        "last_stdout_tail": snap["last_stdout_tail"],
     })
 
 

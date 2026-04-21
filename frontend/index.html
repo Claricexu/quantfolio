@@ -8,17 +8,18 @@
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
-    --bg-base: #020617; --bg-card: #0f172a; --bg-cell: #1e293b;
-    --bg-row-even: #0c1524; --bg-row-odd: #0f172a; --bg-hover: #162032;
-    --border: #1e293b; --border-light: #334155;
-    --text-primary: #f1f5f9; --text-secondary: #e2e8f0;
-    --text-muted: #94a3b8; --text-dim: #64748b; --text-faint: #475569;
-    --text-ghost: #334155;
-    --green-bg: #0d3320; --green-text: #34d399; --green-border: #166534;
+    /* Ocean Depths — adapted for Quantfolio */
+    --bg-base: #060d18; --bg-card: #0e1a2b; --bg-cell: #152535;
+    --bg-row-even: #0b1622; --bg-row-odd: #0e1a2b; --bg-hover: #17303f;
+    --border: #1c2d3e; --border-light: #2a4558;
+    --text-primary: #f1faee; --text-secondary: #d8ece4;
+    --text-muted: #8ba8a8; --text-dim: #5a7e7e; --text-faint: #3d6060;
+    --text-ghost: #2a4848;
+    --green-bg: #0d3325; --green-text: #34d399; --green-border: #166534;
     --red-bg: #3b1118; --red-text: #fb7185; --red-border: #881337;
     --yellow-bg: #2a2510; --yellow-text: #fbbf24; --yellow-border: #854d0e;
-    --purple-bg: #1e1333; --purple-text: #c084fc; --purple-border: #6b21a8;
-    --blue: #3b82f6; --blue-light: #60a5fa; --blue-dark: #2563eb;
+    --purple-bg: #121e30; --purple-text: #7ec8cf; --purple-border: #1e5a6a;
+    --blue: #2d8b8b; --blue-light: #a8dadc; --blue-dark: #1e6e6e;
     --mono: 'JetBrains Mono', monospace; --sans: 'Inter', -apple-system, sans-serif;
   }
   html { background: var(--bg-base); color: var(--text-secondary); }
@@ -44,7 +45,7 @@
     box-shadow:0 0 12px var(--green-text); animation: pulse 2s infinite; }
   .header-label { font-size:11px; color:var(--text-dim); letter-spacing:2px; text-transform:uppercase; font-weight:600; }
   h1 { font-size:36px; font-weight:800; letter-spacing:-1.5px; font-family:var(--mono);
-    background: linear-gradient(135deg, var(--text-primary) 0%, var(--blue-light) 50%, var(--green-text) 100%);
+    background: linear-gradient(135deg, var(--text-primary) 0%, #a8dadc 40%, #2d8b8b 100%);
     -webkit-background-clip:text; -webkit-text-fill-color:transparent; line-height:1.1; }
   .date { font-size:13px; color:var(--text-faint); margin-top:6px; }
 
@@ -65,9 +66,7 @@
   .btn { padding:14px 28px; border-radius:10px; border:none; font-size:14px; font-weight:700;
     cursor:pointer; font-family:var(--sans); letter-spacing:0.5px; transition:all 0.2s; }
   .btn-primary { background:linear-gradient(135deg, var(--blue), var(--blue-dark)); color:#fff;
-    box-shadow:0 2px 12px rgba(59,130,246,0.3); }
-  .btn-compare { background:linear-gradient(135deg, #7c3aed, #6d28d9); color:#fff;
-    box-shadow:0 2px 12px rgba(124,58,237,0.3); }
+    box-shadow:0 2px 12px rgba(45,139,139,0.35); }
   .btn:disabled { opacity:0.4; cursor:wait; box-shadow:none; background:var(--bg-cell); }
   .btn-sm { padding:8px 16px; border-radius:8px; border:1px solid var(--border);
     background:var(--bg-card); color:var(--text-muted); font-size:12px; cursor:pointer; font-weight:600;
@@ -81,6 +80,20 @@
     color:var(--text-muted); font-size:12px; cursor:pointer; font-family:var(--mono); font-weight:600;
     transition:all 0.15s; }
   .chip:hover { border-color:var(--blue); color:var(--blue-light); }
+
+  /* Leader Detector filter chips (smaller, with active state) */
+  .ldr-chip { padding:4px 10px; border-radius:14px; background:var(--bg-cell); border:1px solid var(--border);
+    color:var(--text-muted); font-size:11px; cursor:pointer; font-weight:600; letter-spacing:0.3px;
+    transition:all 0.15s; display:inline-flex; align-items:center; gap:5px; }
+  .ldr-chip:hover { border-color:var(--blue); color:var(--text-primary); }
+  .ldr-chip.active { background:var(--blue); border-color:var(--blue); color:#fff; }
+  .ldr-chip-n { font-size:10px; opacity:0.7; font-variant-numeric:tabular-nums; }
+  .ldr-chip.active .ldr-chip-n { opacity:0.85; }
+
+  /* Leader Detector sortable header */
+  .ldr-sort-th { cursor:pointer; user-select:none; transition:color 0.15s; }
+  .ldr-sort-th:hover { color:var(--text-primary); }
+  .ldr-sort-arrow { display:inline-block; margin-left:4px; font-size:9px; color:var(--blue-light); }
 
   /* Cards */
   .card { background:var(--bg-card); border:1px solid var(--border); border-radius:12px;
@@ -99,7 +112,7 @@
   .svr-box { border-radius:8px; padding:12px 16px; }
   .svr-box .label { font-size:10px; color:var(--text-dim); letter-spacing:1px; margin-bottom:4px; text-transform:uppercase; font-weight:600; }
   .svr-box .value { font-weight:800; font-family:var(--mono); }
-  .svr-hint { font-size:9px; color:var(--text-faint); margin-top:2px; }
+  .svr-hint { font-size:10px; margin-top:3px; font-weight:600; letter-spacing:0.3px; }
   .stats-row { display:flex; gap:16px; flex-wrap:wrap; font-size:12px; color:var(--text-dim);
     border-top:1px solid var(--border); padding-top:14px; }
   .stats-row strong { color:var(--text-muted); }
@@ -134,6 +147,16 @@
   td { padding:10px 14px; }
   td.mono { font-family:var(--mono); }
   .svr-cell { font-family:var(--mono); font-size:12px; font-weight:600; }
+  /* Clickable symbol cell in report tables — opens fundamental detail panel */
+  td.symbol-cell { cursor:pointer; transition:color 0.15s; }
+  td.symbol-cell:hover { color:var(--blue-light) !important; text-decoration:underline; }
+  /* Detail panel — a block-level sibling of the clicked table so its width
+     is bounded by the page container (not the wide scrollable table). */
+  .detail-card-wrap { margin:10px 0 16px; position:relative; }
+  .detail-card-wrap .detail-close { position:absolute; top:10px; right:14px;
+    cursor:pointer; color:var(--text-ghost); font-size:16px; padding:4px 10px;
+    transition:color 0.15s; z-index:2; }
+  .detail-card-wrap .detail-close:hover { color:var(--red-text); }
 
   /* Summary cards for report */
   .summary-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px,1fr)); gap:12px; margin-bottom:24px; }
@@ -158,7 +181,7 @@
     border-top:2px solid var(--blue-light); border-radius:50%; animation:spin 0.8s linear infinite; }
   .error-box { background:var(--red-bg); border:1px solid var(--red-border); border-radius:10px;
     padding:20px; color:var(--red-text); margin-top:16px; }
-  .scan-banner { background:#1a1a2e; border:1px solid #2d2b55; border-radius:8px; padding:12px 16px;
+  .scan-banner { background:#0e1e2e; border:1px solid #1c3d4d; border-radius:8px; padding:12px 16px;
     font-size:12px; color:var(--text-muted); margin-bottom:16px; display:flex; align-items:center; gap:10px; }
 
   /* Compare side-by-side */
@@ -223,6 +246,7 @@
     <button class="tab active" data-tab="lookup" onclick="switchTab('lookup')">Ticker Lookup</button>
     <button class="tab" data-tab="report" onclick="switchTab('report')">Daily Report</button>
     <button class="tab" data-tab="library" onclick="switchTab('library')">Strategy Lab</button>
+    <button class="tab" data-tab="leaders" onclick="switchTab('leaders')">Leader Detector</button>
   </div>
 
   <!-- ================================================================= -->
@@ -231,28 +255,10 @@
   <div id="tab-lookup" class="fade-in">
     <div class="search-row">
       <input class="search-input" id="tickerInput" type="text" placeholder="Enter ticker symbol (e.g. AAPL)"
-             onkeydown="if(event.key==='Enter')runPredict()" />
-      <button class="btn btn-primary" id="btnPredict" onclick="runPredict()">Predict</button>
-      <button class="btn btn-compare" id="btnCompare" onclick="runCompare()">Compare Both</button>
+             onkeydown="if(event.key==='Enter')runCompare()" />
+      <button class="btn btn-primary" id="btnPredict" onclick="runCompare()">Predict</button>
     </div>
-
-    <!-- Hyperparameter Controls (for single model) -->
-    <div id="singleModelControls" style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin:10px 0 6px;padding:12px 16px;background:var(--bg-card);border:1px solid var(--border);border-radius:10px">
-      <div style="display:flex;align-items:center;gap:8px">
-        <label style="font-size:11px;color:var(--text-dim);letter-spacing:0.5px;white-space:nowrap">Model</label>
-        <div id="modelToggle" style="display:flex;border-radius:6px;overflow:hidden;border:1px solid var(--border)">
-          <button class="mtog active" data-ver="v3" onclick="setModel('v3')" style="padding:4px 12px;font-size:11px;font-family:var(--mono);font-weight:600;border:none;cursor:pointer;transition:all 0.15s;background:var(--blue);color:#fff">Pro</button>
-          <button class="mtog" data-ver="v2" onclick="setModel('v2')" style="padding:4px 12px;font-size:11px;font-family:var(--mono);font-weight:600;border:none;cursor:pointer;transition:all 0.15s;background:var(--bg-base);color:var(--text-dim)">Lite</button>
-        </div>
-      </div>
-      <div style="width:1px;height:20px;background:var(--border)"></div>
-      <div style="display:flex;align-items:center;gap:6px">
-        <span style="font-size:11px;color:var(--text-dim);letter-spacing:0.5px">Train:</span>
-        <span style="font-size:11px;color:var(--text-muted);font-family:var(--mono)">2010 &#8594; present (expanding window)</span>
-        <span title="Trains on all data from 2010-01-01 to present. Z-score (126-day lookback) handles recency. Retrains every 63 trading days." style="cursor:help;font-size:11px;color:var(--text-faint);border:1px solid var(--border);border-radius:50%;width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center">?</span>
-      </div>
-    </div>
-    <p class="search-hint" id="modelHint">Pro: Stacking Ensemble (LightGBM + XGBoost + RF &#8594; inverse-MAE weighted) | 22 features | Z-score &#177;2.5&#963; | Auto: ETF&#8594;Full Signal, Stock&#8594;Buy-Only</p>
+    <p class="search-hint" id="modelHint">Compares Lite (13 features) and Pro (22 features) models with consensus signal and confidence scoring</p>
 
     <div id="predResult"></div>
     <div id="backtestSection"></div>
@@ -295,11 +301,66 @@
     <div id="libChartSection"></div>
   </div>
 
+  <!-- ================================================================= -->
+  <!--  LEADER DETECTOR TAB                                               -->
+  <!-- ================================================================= -->
+  <div id="tab-leaders" style="display:none" class="fade-in">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;gap:16px;flex-wrap:wrap">
+      <div>
+        <h2 style="font-size:20px;font-weight:700;color:var(--text-primary);margin-bottom:4px">Leader Detector</h2>
+        <p style="font-size:12px;color:var(--text-faint)">Ranked universe from SEC ~10k (prescreened ~1.4k). Leaders selected by verdict, firm score, archetype, and sector.</p>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <div id="leadersMeta" style="font-size:11px;color:var(--text-faint);letter-spacing:0.5px">&mdash;</div>
+        <button class="btn-sm" onclick="downloadLeadersCsv()" id="btnDownloadLeaders" title="Download leaders.csv">Download CSV</button>
+        <button class="btn-sm" onclick="rebuildLeaders()" id="btnRebuildLeaders">Rebuild Now</button>
+      </div>
+    </div>
+    <div id="leadersStatus"></div>
+    <div id="leadersControls" style="display:none;margin-bottom:14px;padding:12px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px">
+      <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <span style="font-size:10px;letter-spacing:1px;color:var(--text-muted);font-weight:600">SHOW</span>
+          <button class="ldr-chip active" data-filter="sel" data-value="all"      onclick="onLeadersFilterChip(this)">All <span class="ldr-chip-n" id="cntSelAll">&mdash;</span></button>
+          <button class="ldr-chip"        data-filter="sel" data-value="selected" onclick="onLeadersFilterChip(this)">Selected only <span class="ldr-chip-n" id="cntSelSelected">&mdash;</span></button>
+        </div>
+        <div style="width:1px;height:20px;background:var(--border)"></div>
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <span style="font-size:10px;letter-spacing:1px;color:var(--text-muted);font-weight:600">VERDICT</span>
+          <button class="ldr-chip active" data-filter="verdict" data-value="ALL"    onclick="onLeadersFilterChip(this)">All</button>
+          <button class="ldr-chip"        data-filter="verdict" data-value="LEADER" onclick="onLeadersFilterChip(this)">Leader</button>
+          <button class="ldr-chip"        data-filter="verdict" data-value="GEM"    onclick="onLeadersFilterChip(this)">Gem</button>
+          <button class="ldr-chip"        data-filter="verdict" data-value="WATCH"  onclick="onLeadersFilterChip(this)">Watch</button>
+          <button class="ldr-chip"        data-filter="verdict" data-value="AVOID"  onclick="onLeadersFilterChip(this)">Avoid</button>
+        </div>
+        <div style="width:1px;height:20px;background:var(--border)"></div>
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <span style="font-size:10px;letter-spacing:1px;color:var(--text-muted);font-weight:600">ARCHETYPE</span>
+          <button class="ldr-chip active" data-filter="archetype" data-value="ALL"    onclick="onLeadersFilterChip(this)">All</button>
+          <button class="ldr-chip"        data-filter="archetype" data-value="GROWTH" onclick="onLeadersFilterChip(this)">Growth</button>
+          <button class="ldr-chip"        data-filter="archetype" data-value="MATURE" onclick="onLeadersFilterChip(this)">Mature</button>
+        </div>
+        <div style="width:1px;height:20px;background:var(--border)"></div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="font-size:10px;letter-spacing:1px;color:var(--text-muted);font-weight:600">SECTOR</span>
+          <select id="leadersSectorSelect" onchange="onLeadersSectorChange(this)"
+                  style="background:var(--bg-cell);color:var(--text-primary);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:12px;min-width:180px">
+            <option value="ALL">All sectors</option>
+          </select>
+        </div>
+        <div style="margin-left:auto;font-size:11px;color:var(--text-faint)">
+          <span id="leadersVisibleCount">&mdash;</span>
+        </div>
+      </div>
+    </div>
+    <div id="leadersContent"></div>
+  </div>
+
   <!-- Footer -->
   <div class="footer">
-    <p><strong>Disclaimer:</strong> For educational and research purposes only.
-    Predictions are ML model outputs - not investment advice. Past performance does not equal future results.</p>
-    <p>Pro: Stacking Ensemble (22 features, inverse-MAE weighted) | Lite: RF + XGBoost (13 features) | Z-score &#177;2.5&#963; signals | Auto strategy: ETFs &#8594; Full Signal, Stocks &#8594; Buy-Only</p>
+    <p><strong>Quantfolio</strong> &mdash; ML-powered signal engine comparing two ensemble models across 78+ tickers</p>
+    <p>Pro: Stacking Ensemble (LightGBM + XGBoost + RF, 22 features) | Lite: RF + XGBoost (13 features) | Walk-forward trained from 2010</p>
+    <p style="margin-top:8px;color:var(--text-ghost)">For educational and research purposes only. Not investment advice.</p>
   </div>
 </div>
 
@@ -330,12 +391,21 @@ QUICK_SYMBOLS.forEach(sym => {
 // =================================================================
 //  HELPERS
 // =================================================================
-function fetchTimeout(url, ms = 60000) {
+function fetchTimeout(url, ms = 60000, opts = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ms);
-  return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(timer));
+  // Merge opts first so our own `signal` overrides any caller-supplied one
+  // (otherwise the abort timer wouldn't fire).
+  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(timer));
 }
 function fmt$(v) { return v != null ? '$' + Number(v).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) : '\u2014'; }
+function fmtCachedAt(iso) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+  } catch { return iso; }
+}
 function fmtCap(v) {
   if (!v) return '\u2014';
   if (v >= 1e12) return '$' + (v/1e12).toFixed(1) + 'T';
@@ -380,6 +450,180 @@ function signalColor(sig) {
   return 'var(--yellow-text)';
 }
 
+// ── Fundamental Verdict helpers (Phase 1.9 4-verdict schema) ──
+// Legacy 5-verdict names (INDUSTRY_LEADER / POTENTIAL_LEADER / HIDDEN_GEM)
+// are kept as fallbacks so any cached pre-1.9 JSON still renders; live
+// pipeline emits LEADER / GEM / WATCH / AVOID / INSUFFICIENT_DATA only.
+function verdictColor(v) {
+  if (v === 'LEADER' || v === 'INDUSTRY_LEADER') return 'var(--green-text)';
+  if (v === 'GEM'    || v === 'HIDDEN_GEM')      return '#22d3ee';
+  if (v === 'POTENTIAL_LEADER')                  return 'var(--blue-light)';
+  if (v === 'WATCH')                             return 'var(--yellow-text)';
+  if (v === 'AVOID')                             return 'var(--red-text)';
+  return 'var(--text-ghost)';
+}
+function verdictBg(v) {
+  if (v === 'LEADER' || v === 'INDUSTRY_LEADER') return 'var(--green-bg)';
+  if (v === 'GEM'    || v === 'HIDDEN_GEM')      return 'rgba(34,211,238,0.12)';
+  if (v === 'POTENTIAL_LEADER')                  return 'rgba(96,165,250,0.12)';
+  if (v === 'WATCH')                             return 'var(--yellow-bg)';
+  if (v === 'AVOID')                             return 'var(--red-bg)';
+  return 'var(--bg-cell)';
+}
+function verdictBorder(v) {
+  if (v === 'LEADER' || v === 'INDUSTRY_LEADER') return 'var(--green-border)';
+  if (v === 'GEM'    || v === 'HIDDEN_GEM')      return 'rgba(34,211,238,0.4)';
+  if (v === 'POTENTIAL_LEADER')                  return 'rgba(96,165,250,0.4)';
+  if (v === 'WATCH')                             return 'var(--yellow-border)';
+  if (v === 'AVOID')                             return 'var(--red-border)';
+  return 'var(--border)';
+}
+function verdictLabel(v) {
+  return ({
+    LEADER:            'Leader',
+    GEM:               'Gem',
+    WATCH:             'Watch',
+    AVOID:             'Avoid',
+    INSUFFICIENT_DATA: 'No Fundamental Data',
+    // Legacy 5-verdict fallbacks (pre-Phase-1.9)
+    INDUSTRY_LEADER:   'Leader',
+    HIDDEN_GEM:        'Gem',
+    POTENTIAL_LEADER:  'Potential Leader',
+  })[v] || (v || 'Unknown');
+}
+function verdictShort(v) {
+  return ({
+    LEADER:            'LEADER',
+    GEM:               'GEM',
+    WATCH:             'WATCH',
+    AVOID:             'AVOID',
+    INSUFFICIENT_DATA: '\u2014',
+    // Legacy fallbacks
+    INDUSTRY_LEADER:   'LEADER',
+    HIDDEN_GEM:        'GEM',
+    POTENTIAL_LEADER:  'POTENTIAL',
+  })[v] || (v || '\u2014');
+}
+function fmtPct(v, digits=1) {
+  return v == null ? '\u2014' : (v*100).toFixed(digits) + '%';
+}
+function testDot(pass) {
+  if (pass === true)  return '<span style="color:var(--green-text);font-size:14px;font-weight:700">\u2713</span>';
+  if (pass === false) return '<span style="color:var(--red-text);font-size:14px;font-weight:700">\u2717</span>';
+  return '<span style="color:var(--text-ghost);font-size:14px">\u2013</span>';
+}
+
+// ── Archetype (Path A) — company profile tag read alongside the verdict ──
+function archetypeLabel(a) {
+  return ({
+    GROWTH:     'Growth',
+    COMPOUNDER: 'Compounder',
+    ARISTOCRAT: 'Aristocrat',
+    MATURE:     'Mature',
+    SPEC:       'Speculative',
+    UNKNOWN:    '\u2014',
+  })[a] || '\u2014';
+}
+function archetypeColor(a) {
+  if (a === 'GROWTH')     return 'rgba(96,165,250,1)';   // blue
+  if (a === 'COMPOUNDER') return 'var(--green-text)';
+  if (a === 'ARISTOCRAT') return 'rgba(192,132,252,1)';  // purple
+  if (a === 'MATURE')     return 'var(--text-muted)';
+  if (a === 'SPEC')       return 'var(--yellow-text)';
+  return 'var(--text-ghost)';
+}
+function archetypeChip(a) {
+  if (!a || a === 'UNKNOWN') return '';
+  const c = archetypeColor(a);
+  return `<span style="display:inline-block;font-size:10px;font-weight:700;letter-spacing:0.5px;color:${c};background:rgba(255,255,255,0.03);border:1px solid ${c};padding:2px 8px;border-radius:10px;margin-left:10px;vertical-align:middle;text-transform:uppercase">${archetypeLabel(a)}</span>`;
+}
+
+function buildVerdictCard(v) {
+  if (!v) return '';
+  const verdict = v.verdict || 'INSUFFICIENT_DATA';
+  if (verdict === 'INSUFFICIENT_DATA') {
+    return `
+    <div class="card fade-in" style="margin-top:14px;border-left:3px solid var(--text-ghost)">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <div style="font-size:12px;font-weight:600;color:var(--text-secondary);letter-spacing:0.5px">FUNDAMENTAL VERDICT</div>
+        <div style="font-size:10px;color:var(--text-ghost);letter-spacing:0.3px">${v.hint || 'No SEC data (ETF/ADR, or SEC refresh not yet run)'}</div>
+      </div>
+    </div>`;
+  }
+
+  const color = verdictColor(verdict);
+  const bg = verdictBg(verdict);
+  const border = verdictBorder(verdict);
+  const score = v.good_firm_score != null ? v.good_firm_score : 0;
+  const tests = v.tests || {};
+  const flags = v.dealbreakers || {};
+
+  const testRow = [
+    ['Growth',       tests.growth],
+    ['Business',     tests.business_model],
+    ['Profit',       tests.profitability],
+    ['Moat',         tests.moat],
+    ['Capital Eff.', tests.capital_efficiency],
+  ].map(([l,p]) => `
+    <div style="display:flex;flex-direction:column;align-items:center;gap:4px;min-width:70px">
+      <div style="font-size:10px;color:var(--text-dim);letter-spacing:0.5px">${l}</div>
+      ${testDot(p)}
+    </div>`).join('');
+
+  const flagChips = Object.entries(flags).filter(([,f]) => f).map(([k]) => {
+    const lbl = ({ diluting:'Diluting', burning_cash:'Cash Burn', spac_or_microcap:'Micro-cap/SPAC' })[k] || k;
+    return `<span style="display:inline-block;font-size:10px;font-weight:600;color:var(--red-text);background:var(--red-bg);border:1px solid var(--red-border);padding:2px 8px;border-radius:10px;letter-spacing:0.5px">\u26A0 ${lbl}</span>`;
+  }).join(' ');
+
+  const rows = [
+    ['Revenue (TTM)',        fmtCap(v.revenue_ttm)],
+    ['Revenue YoY',          fmtPct(v.revenue_yoy_growth)],
+    ['Revenue 3Y CAGR',      fmtPct(v.revenue_3y_cagr)],
+    ['Growth Trajectory',    v.growth_trajectory || '\u2014'],
+    ['Gross Margin (TTM)',   fmtPct(v.gross_margin_ttm)],
+    ['Operating Margin',     fmtPct(v.operating_margin_ttm)],
+    ['Operating Cash Flow',  fmtCap(v.operating_cash_flow_ttm)],
+    ['Free Cash Flow',       fmtCap(v.free_cash_flow_ttm)],
+    ['Rule of 40',           v.rule_40_score != null ? v.rule_40_score.toFixed(1) : '\u2014'],
+    ['ROIC (TTM)',           fmtPct(v.roic_ttm)],
+    ['SVR',                  v.svr != null ? v.svr.toFixed(1)+'x' : '\u2014'],
+    ['SVR vs Sector',        v.svr_vs_sector_median != null ? v.svr_vs_sector_median.toFixed(2)+'x' : '\u2014'],
+    ['Sector Rank',          v.market_cap_rank_in_sector != null ? ('#'+v.market_cap_rank_in_sector+(v.sector_peers ? ' of '+v.sector_peers : '')) : '\u2014'],
+    ['Shares 3Y Growth',     fmtPct(v.shares_growth_3y)],
+    ['Sector',               (v.sector || '\u2014').toString().slice(0, 40)],
+  ];
+  const rowsHTML = rows.map(([l,val]) => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 10px;border-bottom:1px solid var(--border)">
+      <span style="font-size:11px;color:var(--text-dim);letter-spacing:0.3px">${l}</span>
+      <span style="font-size:12px;color:var(--text-secondary);font-family:var(--mono);font-weight:600">${val}</span>
+    </div>`).join('');
+
+  return `
+  <div class="card fade-in" style="margin-top:14px;border-left:3px solid ${color}">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px">
+      <div>
+        <div style="font-size:10px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">Fundamental Verdict</div>
+        <div style="font-size:22px;font-weight:700;color:${color};letter-spacing:0.5px">${verdictLabel(verdict)}${archetypeChip(v.archetype)}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:3px">Good Firm Score: <strong style="color:${color}">${score}/100</strong> \u00B7 Tests passed: <strong>${v.tests_passed || 0}/5</strong></div>
+      </div>
+      <div style="background:${bg};border:1px solid ${border};border-radius:8px;padding:8px 14px;text-align:right;min-width:90px">
+        <div style="font-size:10px;color:var(--text-dim);letter-spacing:0.5px">SCORE</div>
+        <div style="font-size:28px;font-weight:700;color:${color};line-height:1">${score}</div>
+      </div>
+    </div>
+    <div style="background:var(--bg-cell);border-radius:6px;overflow:hidden;height:6px;margin-bottom:12px">
+      <div style="width:${score}%;height:100%;background:${color};transition:width 0.6s ease"></div>
+    </div>
+    ${flagChips ? `<div style="margin-bottom:12px;display:flex;gap:6px;flex-wrap:wrap">${flagChips}</div>` : ''}
+    <div style="display:flex;justify-content:space-around;padding:10px;background:var(--bg-cell);border-radius:8px;margin-bottom:12px">
+      ${testRow}
+    </div>
+    <div style="background:var(--bg-cell);border-radius:8px;overflow:hidden">
+      ${rowsHTML}
+    </div>
+  </div>`;
+}
+
 
 // =================================================================
 //  TAB SWITCHING
@@ -389,8 +633,10 @@ function switchTab(tab) {
   document.getElementById('tab-lookup').style.display = tab === 'lookup' ? '' : 'none';
   document.getElementById('tab-report').style.display = tab === 'report' ? '' : 'none';
   document.getElementById('tab-library').style.display = tab === 'library' ? '' : 'none';
+  document.getElementById('tab-leaders').style.display = tab === 'leaders' ? '' : 'none';
   if (tab === 'report') loadReport();
   if (tab === 'library') loadLibrary();
+  if (tab === 'leaders') loadLeaders();
   if (tab === 'lookup') document.getElementById('tickerInput').focus();
 }
 
@@ -453,21 +699,37 @@ function buildSingleCard(d) {
   ).join('');
 
   let svrBlock = '';
+  const s_sect = d.sector;
+  const s_ind = d.industry;
+  const s_qt = d.quote_type;
+  const s_isETF = s_qt === 'ETF';
+  const s_classLabel = s_isETF ? 'ETF' : (s_sect || s_qt || '\u2014');
+  const s_classDetail = s_isETF ? (s_ind || 'Exchange-Traded Fund') : (s_ind || '');
+
   if (d.svr != null) {
     svrBlock = `
-      <div class="svr-grid" style="grid-template-columns:1fr 1fr 1fr">
-        <div class="svr-box" style="background:#1a1a2e;border:1px solid ${d.svr<3?'var(--green-border)':d.svr<8?'var(--yellow-border)':'var(--red-border)'}">
+      <div class="svr-grid" style="grid-template-columns:1fr 1fr 1fr 1fr">
+        <div class="svr-box" style="background:#0e1e2e;border:1px solid ${d.svr<3?'var(--green-border)':d.svr<8?'var(--yellow-border)':'var(--red-border)'}">
           <div class="label">SVR</div>
           <div class="value" style="font-size:22px;color:${svrColor(d.svr)}">${d.svr.toFixed(1)}x</div>
-          <div class="svr-hint">${svrLabel(d.svr)}</div>
+          <div class="svr-hint" style="color:${svrColor(d.svr)};opacity:0.85">${svrLabel(d.svr)}</div>
         </div>
         <div class="svr-box" style="background:var(--bg-cell)"><div class="label">Market Cap</div>
           <div class="value" style="font-size:16px;color:var(--text-secondary)">${fmtCap(d.market_cap)}</div></div>
-        <div class="svr-box" style="background:var(--bg-cell)"><div class="label">Qtr Revenue</div>
+        <div class="svr-box" style="background:var(--bg-cell)"><div class="label">Quarterly Revenue</div>
           <div class="value" style="font-size:16px;color:var(--text-secondary)">${fmtCap(d.quarterly_revenue)}</div></div>
+        <div class="svr-box" style="background:var(--bg-cell)"><div class="label">${s_isETF ? 'Type' : 'Sector'}</div>
+          <div class="value" style="font-size:14px;color:var(--text-secondary)">${s_classLabel}</div>
+          ${s_classDetail ? `<div style="font-size:11px;color:var(--text-muted);margin-top:3px">${s_classDetail}</div>` : ''}</div>
       </div>`;
   } else {
-    svrBlock = `<div style="background:var(--bg-cell);border-radius:8px;padding:10px 16px;font-size:12px;color:var(--text-faint);margin-bottom:16px">SVR: N/A - ETF or fundamental data unavailable</div>`;
+    svrBlock = `
+      <div class="svr-grid" style="grid-template-columns:1fr 1fr">
+        <div style="background:var(--bg-cell);border-radius:8px;padding:10px 16px;font-size:12px;color:var(--text-faint)">SVR: N/A \u2014 ${s_isETF ? 'ETF' : 'fundamental data unavailable'}</div>
+        <div class="svr-box" style="background:var(--bg-cell)"><div class="label">${s_isETF ? 'Type' : 'Sector'}</div>
+          <div class="value" style="font-size:14px;color:var(--text-secondary)">${s_classLabel}</div>
+          ${s_classDetail ? `<div style="font-size:11px;color:var(--text-muted);margin-top:3px">${s_classDetail}</div>` : ''}</div>
+      </div>`;
   }
 
 
@@ -516,10 +778,10 @@ function buildSingleCard(d) {
 async function runCompare() {
   const sym = document.getElementById('tickerInput').value.trim().toUpperCase();
   if (!sym) return;
-  const btn = document.getElementById('btnCompare');
+  const btn = document.getElementById('btnPredict');
   const out = document.getElementById('predResult');
 
-  btn.disabled = true; btn.textContent = 'Comparing\u2026';
+  btn.disabled = true; btn.textContent = 'Predicting\u2026';
   out.innerHTML = loaderHTML('Running Lite and Pro models side by side\u2026');
 
   try {
@@ -532,10 +794,18 @@ async function runCompare() {
     const d = await res.json();
     out.innerHTML = buildCompareCard(d);
     showBacktestButton(sym);
+    // Fundamental verdict (non-blocking, silent failure)
+    fetchTimeout(`${API_BASE}/api/screener/${encodeURIComponent(sym)}`, 30000)
+      .then(async sres => {
+        if (!sres.ok) return;
+        const v = await sres.json();
+        out.insertAdjacentHTML('beforeend', buildVerdictCard(v));
+      })
+      .catch(() => { /* screener module unavailable or slow — skip silently */ });
   } catch (e) {
     out.innerHTML = `<div class="error-box"><strong>Connection error</strong>: ${e.message}</div>`;
   } finally {
-    btn.disabled = false; btn.textContent = 'Compare Both';
+    btn.disabled = false; btn.textContent = 'Predict';
   }
 }
 
@@ -551,19 +821,38 @@ function buildCompareCard(d) {
   const consBorder = signalBorder(cs);
   const consColor = signalColor(cs);
 
+  // Sector / Industry card
+  const sect = d.sector;
+  const ind = d.industry;
+  const qt = d.quote_type;
+  const isETF = qt === 'ETF';
+  const classLabel = isETF ? 'ETF' : (sect && ind ? `${sect}` : (sect || qt || '\u2014'));
+  const classDetail = isETF ? (ind || 'Exchange-Traded Fund') : (ind || '');
+
   let svrBlock = '';
   if (d.svr != null) {
     svrBlock = `
-      <div class="svr-grid" style="grid-template-columns:1fr 1fr 1fr">
-        <div class="svr-box" style="background:#1a1a2e;border:1px solid ${d.svr<3?'var(--green-border)':d.svr<8?'var(--yellow-border)':'var(--red-border)'}">
+      <div class="svr-grid" style="grid-template-columns:1fr 1fr 1fr 1fr">
+        <div class="svr-box" style="background:#0e1e2e;border:1px solid ${d.svr<3?'var(--green-border)':d.svr<8?'var(--yellow-border)':'var(--red-border)'}">
           <div class="label">SVR</div>
           <div class="value" style="font-size:20px;color:${svrColor(d.svr)}">${d.svr.toFixed(1)}x</div>
-          <div class="svr-hint">${svrLabel(d.svr)}</div>
+          <div class="svr-hint" style="color:${svrColor(d.svr)};opacity:0.85">${svrLabel(d.svr)}</div>
         </div>
         <div class="svr-box" style="background:var(--bg-cell)"><div class="label">Market Cap</div>
           <div class="value" style="font-size:15px;color:var(--text-secondary)">${fmtCap(d.market_cap)}</div></div>
-        <div class="svr-box" style="background:var(--bg-cell)"><div class="label">Qtr Revenue</div>
+        <div class="svr-box" style="background:var(--bg-cell)"><div class="label">Quarterly Revenue</div>
           <div class="value" style="font-size:15px;color:var(--text-secondary)">${fmtCap(d.quarterly_revenue)}</div></div>
+        <div class="svr-box" style="background:var(--bg-cell)"><div class="label">${isETF ? 'Type' : 'Sector'}</div>
+          <div class="value" style="font-size:14px;color:var(--text-secondary)">${classLabel}</div>
+          ${classDetail ? `<div style="font-size:11px;color:var(--text-muted);margin-top:3px">${classDetail}</div>` : ''}</div>
+      </div>`;
+  } else {
+    svrBlock = `
+      <div class="svr-grid" style="grid-template-columns:1fr 1fr">
+        <div style="background:var(--bg-cell);border-radius:8px;padding:10px 16px;font-size:12px;color:var(--text-faint)">SVR: N/A \u2014 ${isETF ? 'ETF' : 'fundamental data unavailable'}</div>
+        <div class="svr-box" style="background:var(--bg-cell)"><div class="label">${isETF ? 'Type' : 'Sector'}</div>
+          <div class="value" style="font-size:14px;color:var(--text-secondary)">${classLabel}</div>
+          ${classDetail ? `<div style="font-size:11px;color:var(--text-muted);margin-top:3px">${classDetail}</div>` : ''}</div>
       </div>`;
   }
 
@@ -595,7 +884,12 @@ function buildCompareCard(d) {
           <span class="pred-symbol">${d.symbol}</span>
           <span style="font-size:12px;color:var(--text-dim);font-weight:600">${fmt$(d.current_price)}</span>
         </div>
-        <span style="font-size:11px;color:var(--text-faint)">Through ${d.last_date}</span>
+        <div style="display:flex;align-items:center;gap:10px">
+          ${d.cached_from_report ? `<span title="Served instantly from today's Daily Report cache (generated ${fmtCachedAt(d.cached_at)})" style="display:inline-flex;align-items:center;gap:5px;font-size:10px;color:var(--green-text);background:var(--green-bg);border:1px solid var(--green-border);padding:2px 8px;border-radius:10px;letter-spacing:0.5px;font-weight:600">
+            <span style="width:5px;height:5px;border-radius:50%;background:var(--green-text);box-shadow:0 0 6px var(--green-text)"></span>CACHED
+          </span>` : ''}
+          <span style="font-size:11px;color:var(--text-faint)">Through ${d.last_date}</span>
+        </div>
       </div>
 
       <!-- Consensus -->
@@ -622,13 +916,34 @@ function buildCompareCard(d) {
 // =================================================================
 let reportLoaded = false;
 let _bestStratMap = {};  // symbol → {key, name, sharpe} from backtest library
+let _screenerMap = {};   // symbol → {verdict, score, archetype} from fundamental screener
+
+async function loadScreenerMap() {
+  try {
+    const res = await fetchTimeout(`${API_BASE}/api/screener`, 30000);
+    if (!res.ok) return;
+    const json = await res.json();
+    const data = json.data || [];
+    const m = {};
+    for (const r of data) {
+      if (r && r.symbol) {
+        m[r.symbol] = { verdict: r.verdict, score: r.good_firm_score, archetype: r.archetype };
+      }
+    }
+    _screenerMap = m;
+  } catch (_) { /* screener unavailable — leave map empty */ }
+}
 
 async function loadReport() {
   if (reportLoaded) return;
   const el = document.getElementById('reportContent');
   el.innerHTML = loaderHTML('Loading Lite + Pro report\u2026');
   try {
-    const res = await fetchTimeout(`${API_BASE}/api/report`);
+    // Fetch report and screener in parallel — screener is non-blocking
+    const [res] = await Promise.all([
+      fetchTimeout(`${API_BASE}/api/report`),
+      loadScreenerMap(),
+    ]);
     const json = await res.json();
     _bestStratMap = json.best_strategies || {};
     if (json.data) {
@@ -668,6 +983,7 @@ function pollReport(statusEl) {
         clearInterval(iv);
         statusEl.innerHTML = '';
         _bestStratMap = json.best_strategies || {};
+        await loadScreenerMap();
         renderReport(json);
         reportLoaded = true;
       } else if (attempts > 360) { // 30 min timeout on polling
@@ -768,13 +1084,16 @@ function buildReportRow(r) {
   const v3 = r.v3 || {};
   const v2pct = v2.pct_change != null ? v2.pct_change : null;
   const v3pct = v3.pct_change != null ? v3.pct_change : null;
-  const svr = r.svr;
   const bs = _bestStratMap[r.symbol];
   const bsLabel = bs ? bs.name : '\u2014';
   const bsColor = bs ? 'var(--blue-light)' : 'var(--text-ghost)';
+  // Firm score color tracks the underlying verdict (colored cell = visual cue)
+  const sc = _screenerMap[r.symbol] || {};
+  const vColor = verdictColor(sc.verdict);
+  const gfScore = sc.score != null ? sc.score : null;
   return `
   <tr>
-    <td class="mono" style="font-weight:700;color:var(--text-primary)">${r.symbol}</td>
+    <td class="mono symbol-cell" style="font-weight:700;color:var(--text-primary)" onclick="openSymbolDetail(event, '${r.symbol}')" title="Click for fundamental detail">${r.symbol}</td>
     <td class="mono" style="color:var(--text-muted)">${fmt$(r.current_price)}</td>
     <td>${v2pct != null ? pctHTML(v2pct) : '\u2014'}</td>
     <td>${v2.signal ? signalHTML(v2.signal) : '\u2014'}</td>
@@ -783,11 +1102,67 @@ function buildReportRow(r) {
     <td>${signalHTML(r.consensus_signal)}</td>
     <td><span class="conf-${r.confidence}" style="font-size:11px;font-weight:700;font-family:var(--mono)">${r.confidence}</span></td>
     <td style="font-size:10px;color:${bsColor};font-weight:600">${bsLabel}</td>
-    <td class="svr-cell" style="color:${svrColor(svr)}">${svr != null ? svr.toFixed(1)+'x' : '\u2014'}</td>
+    <td class="mono" style="font-weight:700;color:${vColor}">${gfScore != null ? gfScore : '\u2014'}</td>
   </tr>`;
 }
 
+// Click a symbol in a report table → show a fundamental detail panel just
+// ABOVE the clicked table (as a block-level sibling of .tbl-wrap, so its
+// width is bounded by the page column, not the wide scrollable table).
+// Click the same symbol again to collapse. Only one panel open at a time.
+async function openSymbolDetail(evt, symbol) {
+  evt.stopPropagation();
+  const row = evt.currentTarget.closest('tr');
+  const tblWrap = row && row.closest('.tbl-wrap');
+  if (!tblWrap) return;
+
+  // If a detail for the same symbol is already open anywhere on the page, close it.
+  const existingSame = document.querySelector(`.detail-card-wrap[data-symbol="${CSS.escape(symbol)}"]`);
+  // Close all open details first
+  document.querySelectorAll('.detail-card-wrap').forEach(el => el.remove());
+  if (existingSame) return;
+
+  // Insert loading placeholder BEFORE the clicked table's .tbl-wrap
+  const wrap = document.createElement('div');
+  wrap.className = 'detail-card-wrap';
+  wrap.dataset.symbol = symbol;
+  wrap.innerHTML = `
+    <div style="padding:10px 16px;color:var(--text-dim);font-size:12px;background:var(--bg-cell);border-radius:8px">
+      <span class="detail-close" onclick="this.closest('.detail-card-wrap').remove()" title="Close">\u2715</span>
+      Loading ${symbol} fundamentals\u2026
+    </div>`;
+  tblWrap.parentNode.insertBefore(wrap, tblWrap);
+  wrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+  // Fetch and render
+  try {
+    const res = await fetchTimeout(`${API_BASE}/api/screener/${encodeURIComponent(symbol)}`, 30000);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const v = await res.json();
+    const cardHTML = buildVerdictCard(v) ||
+      `<div style="padding:10px 16px;color:var(--text-dim);font-size:12px;background:var(--bg-cell);border-radius:8px">No fundamental data for ${symbol}.</div>`;
+    wrap.innerHTML = `
+      <span class="detail-close" onclick="this.closest('.detail-card-wrap').remove()" title="Close">\u2715</span>
+      ${cardHTML}`;
+  } catch (e) {
+    wrap.innerHTML = `
+      <div style="padding:10px 16px;color:var(--red-text);font-size:12px;background:var(--bg-cell);border-radius:8px">
+        <span class="detail-close" onclick="this.closest('.detail-card-wrap').remove()" title="Close">\u2715</span>
+        Failed to load ${symbol}: ${e.message || e}
+      </div>`;
+  }
+}
+
 // Sort value extractors per column key
+const VERDICT_RANK = {
+  // Phase 1.9 4-verdict schema (primary)
+  LEADER: 0, GEM: 1, WATCH: 2, AVOID: 3, INSUFFICIENT_DATA: 4,
+  // Legacy 5-verdict fallbacks (pre-Phase-1.9)
+  INDUSTRY_LEADER: 0, HIDDEN_GEM: 1, POTENTIAL_LEADER: 2,
+};
+const ARCHETYPE_RANK = {
+  GROWTH: 0, COMPOUNDER: 1, ARISTOCRAT: 2, MATURE: 3, SPEC: 4, UNKNOWN: 5,
+};
 const SORT_KEYS = {
   symbol:    r => (r.symbol || '').toUpperCase(),
   price:     r => r.current_price || 0,
@@ -799,6 +1174,9 @@ const SORT_KEYS = {
   conf:      r => { const c = r.confidence||''; return c==='HIGH'?0:c==='MEDIUM'?1:c==='CONFLICT'?2:3; },
   strategy:  r => { const b = _bestStratMap[r.symbol]; return b ? b.name : 'zzz'; },
   svr:       r => r.svr != null ? r.svr : Infinity,
+  archetype: r => { const a = (_screenerMap[r.symbol]||{}).archetype; return ARCHETYPE_RANK[a] != null ? ARCHETYPE_RANK[a] : 99; },
+  verdict:   r => { const v = (_screenerMap[r.symbol]||{}).verdict; return VERDICT_RANK[v] != null ? VERDICT_RANK[v] : 99; },
+  gf_score:  r => { const s = (_screenerMap[r.symbol]||{}).score; return s != null ? s : -Infinity; },
 };
 
 // Track sort state per table
@@ -806,7 +1184,7 @@ const _sortStates = {};
 
 function sortReportTable(tableId, key, rows) {
   const prev = _sortStates[tableId] || { key: null, asc: true };
-  const numericCols = ['price','lite_chg','pro_chg','svr'];
+  const numericCols = ['price','lite_chg','pro_chg','svr','gf_score'];
   let asc;
   if (prev.key === key) {
     asc = !prev.asc;  // toggle direction
@@ -853,15 +1231,16 @@ function buildReportTable(rows) {
     { key: 'consensus', label: 'Consensus' },
     { key: 'conf',      label: 'Conf' },
     { key: 'strategy',  label: 'Best Strategy' },
-    { key: 'svr',       label: 'SVR' },
+    { key: 'gf_score',  label: 'Firm Score' },
   ];
 
+  const dataKey = `_rptData_${tid}`;
   const ths = cols.map(c =>
-    `<th class="sortable" data-sort-key="${c.key}" onclick="sortReportTable('${tid}','${c.key}',window._rptData)">${c.label}<span class="sort-arrow" style="opacity:0.3;font-size:9px"> \u25B4</span></th>`
+    `<th class="sortable" data-sort-key="${c.key}" onclick="sortReportTable('${tid}','${c.key}',window['${dataKey}'])">${c.label}<span class="sort-arrow" style="opacity:0.3;font-size:9px"> \u25B4</span></th>`
   ).join('');
 
-  // Store data on single window var (overwritten each render — no accumulation)
-  window._rptData = rows;
+  // Store data per table so sorting doesn't bleed between filtered sections
+  window[dataKey] = rows;
 
   return `
     <div class="tbl-wrap">
@@ -958,11 +1337,11 @@ async function pollBacktest() {
 }
 
 const BT_SERIES = [
-  { key: 'buyhold',      label: 'Buy & Hold',         color: '#94a3b8', dash: [6, 3] },
-  { key: 'lite_buyonly',  label: 'Lite \u2014 Buy-Only',  color: '#38bdf8', dash: [] },
-  { key: 'lite_full',    label: 'Lite \u2014 Full Signal', color: '#3b82f6', dash: [] },
-  { key: 'pro_buyonly',  label: 'Pro \u2014 Buy-Only',    color: '#c084fc', dash: [] },
-  { key: 'pro_full',     label: 'Pro \u2014 Full Signal',  color: '#8b5cf6', dash: [] },
+  { key: 'buyhold',      label: 'Buy & Hold',         color: '#8ba8a8', dash: [6, 3] },
+  { key: 'lite_buyonly',  label: 'Lite \u2014 Buy-Only',  color: '#e9c46a', dash: [] },
+  { key: 'lite_full',    label: 'Lite \u2014 Full Signal', color: '#e76f51', dash: [] },
+  { key: 'pro_buyonly',  label: 'Pro \u2014 Buy-Only',    color: '#a8dadc', dash: [] },
+  { key: 'pro_full',     label: 'Pro \u2014 Full Signal',  color: '#2a9d8f', dash: [] },
 ];
 
 function renderBacktestChart(data) {
@@ -1154,13 +1533,20 @@ function renderLibraryCallout(json) {
     if (item.best_sharpe_value && item.best_sharpe_value > bh) beatBH++;
   });
 
+  const maxCount = Math.max(...ranked.map(s => counts[s.key]), 1);
   const barChips = ranked.map(s => {
     const pct = ((counts[s.key] / items.length) * 100).toFixed(0);
-    return `<span style="display:inline-flex;align-items:center;gap:6px;background:var(--bg-cell);border-radius:6px;padding:6px 12px;font-size:12px">
-      <span class="bt-legend-dot" style="background:${s.color}"></span>
-      <span style="color:var(--text-secondary);font-weight:600">${s.label}</span>
-      <span style="color:var(--text-dim)">${counts[s.key]} tickers (${pct}%)</span>
-    </span>`;
+    const barW = ((counts[s.key] / maxCount) * 100).toFixed(0);
+    return `<div style="display:grid;grid-template-columns:160px 1fr 90px;align-items:center;gap:10px;padding:6px 0">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="bt-legend-dot" style="background:${s.color}"></span>
+        <span style="color:var(--text-secondary);font-weight:600;font-size:12px;white-space:nowrap">${s.label}</span>
+      </div>
+      <div style="height:8px;background:var(--bg-base);border-radius:4px;overflow:hidden">
+        <div style="height:100%;width:${barW}%;background:${s.color};border-radius:4px;opacity:0.7"></div>
+      </div>
+      <div style="text-align:right;font-size:12px;font-family:var(--mono);color:var(--text-muted);white-space:nowrap">${counts[s.key]} <span style="color:var(--text-dim)">(${pct}%)</span></div>
+    </div>`;
   }).join('');
 
   callout.innerHTML = `
@@ -1180,8 +1566,8 @@ function renderLibraryCallout(json) {
           <div style="font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-top:4px">Avg Best Sharpe</div>
         </div>
       </div>
-      <div style="font-size:11px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Best Strategy by Ticker Count</div>
-      <div style="display:flex;flex-wrap:wrap;gap:8px">${barChips}</div>
+      <div style="font-size:11px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase;margin-bottom:6px">Best Strategy by Ticker Count</div>
+      <div style="background:var(--bg-cell);border-radius:8px;padding:10px 16px">${barChips}</div>
     </div>`;
 }
 
@@ -1228,13 +1614,13 @@ function buildLibraryRow(item) {
 
   return `<tr onclick="viewLibraryChart('${item.symbol}')">
     <td class="mono" style="font-weight:700;color:var(--text-primary)">${item.symbol}</td>
-    <td class="mono" style="color:${retColor(bhRet || 0)}">${bhRet != null ? (bhRet >= 0 ? '+' : '') + bhRet + '%' : '\u2014'}</td>
-    <td class="mono" style="color:${shColor(bh.sharpe || 0)}">${bh.sharpe != null ? bh.sharpe.toFixed(2) : '\u2014'}</td>
     <td style="font-weight:600;color:${strategyColor(bestKey)}"><span class="bt-legend-dot" style="background:${strategyColor(bestKey)}"></span>${strategyShortName(bestKey)}</td>
-    <td class="mono" style="color:${shColor(bestSh || 0)};font-weight:700">${bestSh != null ? bestSh.toFixed(2) : '\u2014'}</td>
     <td class="mono" style="color:${retColor(bestRet || 0)}">${bestRet != null ? (bestRet >= 0 ? '+' : '') + bestRet + '%' : '\u2014'}</td>
-    <td class="mono" style="color:${shDeltaColor};font-weight:600">${shDelta != null ? (shDelta >= 0 ? '+' : '') + shDelta.toFixed(2) : '\u2014'}</td>
-    <td style="font-size:10px;color:var(--text-faint)">${item.cache_age_hours != null ? (item.cache_age_hours < 1 ? '<1h' : Math.round(item.cache_age_hours) + 'h') : '\u2014'} ago</td>
+    <td class="mono" style="color:${retColor(bhRet || 0)}">${bhRet != null ? (bhRet >= 0 ? '+' : '') + bhRet + '%' : '\u2014'}</td>
+    <td class="mono" style="color:${shColor(bestSh || 0)};font-weight:700">${bestSh != null ? bestSh.toFixed(2) : '\u2014'}</td>
+    <td class="mono" style="color:${shColor(bh.sharpe || 0)}">${bh.sharpe != null ? bh.sharpe.toFixed(2) : '\u2014'}</td>
+    <td class="mono" style="color:var(--green-text);font-weight:600">${shDelta != null ? '+' + shDelta.toFixed(2) : '\u2014'}</td>
+    <td style="font-size:10px;color:var(--text-faint)">${item.cached_date || '\u2014'}</td>
   </tr>`;
 }
 
@@ -1272,12 +1658,12 @@ function renderLibraryTable(json) {
 
   const cols = [
     { key:'symbol',   label:'Symbol' },
-    { key:'bh_ret',   label:'B&H Return' },
-    { key:'bh_sh',    label:'B&H Sharpe' },
     { key:'best',     label:'Best Strategy' },
-    { key:'best_sh',  label:'Best Sharpe' },
     { key:'best_ret', label:'Best Return' },
-    { key:'delta',    label:'Sharpe +/-' },
+    { key:'bh_ret',   label:'B&H Return' },
+    { key:'best_sh',  label:'Best Sharpe' },
+    { key:'bh_sh',    label:'B&H Sharpe' },
+    { key:'delta',    label:'Sharpe Edge' },
     { key:'age',      label:'Cached' },
   ];
 
@@ -1504,6 +1890,536 @@ function pollBatchStatus() {
       }
     }
   }, 5000);
+}
+
+
+// =================================================================
+//  LEADER DETECTOR TAB
+// =================================================================
+let _leadersLoaded = false;
+let _leadersData = null;       // full universe rows (screener_results-style)
+let _leadersSelected = null;   // Set of symbols in leaders.csv
+let _leadersMeta = null;       // {leaders_count, universe_count, leaders_mtime}
+let _leadersFilter = { sel: 'all', verdict: 'ALL', archetype: 'ALL', sector: 'ALL' };
+let _leadersSort = null;       // null = default (selected-first, score desc, mcap desc); else {col, dir}
+let _rebuildPollTimer = null;  // setInterval id for status polling
+
+// Stage → human label map. Must mirror api_server._leaders_rebuild_worker stages.
+const _STAGE_LABELS = {
+  universe_build: 'Stage 1/4 \u00b7 Metadata gather (Phases 1.0 + 1.1, ~130 min cold)',
+  sec_fetch:      'Stage 2/4 \u00b7 SEC XBRL fetch (Phase 1.2, ~85 min cold)',
+  screener:       'Stage 3/4 \u00b7 Good Firm screen (Phase 1.3, ~5 min)',
+  leader_select:  'Stage 4/4 \u00b7 Leader selection (Phase 1.4, <1 min)',
+};
+
+async function loadLeaders(force=false) {
+  if (_leadersLoaded && !force) return;
+  const status   = document.getElementById('leadersStatus');
+  const content  = document.getElementById('leadersContent');
+  const meta     = document.getElementById('leadersMeta');
+  const controls = document.getElementById('leadersControls');
+  status.innerHTML = '';
+  content.innerHTML = loaderHTML('Loading leader universe\u2026');
+  meta.textContent = '\u2014';
+
+  try {
+    // Fetch universe + leaders + current rebuild status in parallel. If either
+    // CSV is missing (first run), degrade gracefully — empty leaders set just
+    // means nothing is marked selected. Status tells us whether to resume polling.
+    const [uRes, lRes, sRes] = await Promise.all([
+      fetchTimeout(`${API_BASE}/api/universe?source=screener`, 30000).catch(() => null),
+      fetchTimeout(`${API_BASE}/api/leaders`, 15000).catch(() => null),
+      fetchTimeout(`${API_BASE}/api/leaders/rebuild/status`, 10000).catch(() => null),
+    ]);
+
+    let universe = [];
+    let universeMeta = {};
+    if (uRes && uRes.ok) {
+      const j = await uRes.json();
+      universe = j.rows || j.data || [];
+      universeMeta = { count: j.count || universe.length, last_modified: j.last_modified || null };
+    }
+
+    let leaderSyms = new Set();
+    let leadersMetaObj = {};
+    if (lRes && lRes.ok) {
+      const j = await lRes.json();
+      const rows = j.rows || j.data || [];
+      for (const r of rows) {
+        const s = (r.symbol || '').toUpperCase();
+        if (s) leaderSyms.add(s);
+      }
+      leadersMetaObj = { count: j.count || rows.length, last_modified: j.last_modified || null };
+    }
+
+    _leadersData = universe;
+    _leadersSelected = leaderSyms;
+    _leadersMeta = {
+      universe_count: universeMeta.count || 0,
+      leaders_count: leadersMetaObj.count || 0,
+      leaders_mtime: leadersMetaObj.last_modified,
+    };
+
+    // Resume polling if a rebuild is already running (e.g. user closed the tab).
+    if (sRes && sRes.ok) {
+      const snap = await sRes.json();
+      if (snap.status === 'running') {
+        const btn = document.getElementById('btnRebuildLeaders');
+        btn.disabled = true;
+        btn.textContent = 'Rebuilding\u2026';
+        updateRebuildStatusUI(snap);
+        startRebuildPolling();
+      }
+    }
+
+    if (!universe.length && !leaderSyms.size) {
+      controls.style.display = 'none';
+      content.innerHTML = `
+        <div class="error-box" style="background:var(--yellow-bg);border-color:var(--yellow-border);color:var(--yellow-text)">
+          <strong>No universe data yet.</strong><br>
+          Run <code>python universe_builder.py --build</code> then
+          <code>python fundamental_screener.py --universe universe_prescreened.csv --csv-out screener_results.csv</code>
+          to populate. Or click <strong>Rebuild Now</strong> above to run the full pipeline in the background.
+        </div>`;
+      meta.textContent = 'No data';
+      _leadersLoaded = true;
+      return;
+    }
+
+    const mtimeLabel = _leadersMeta.leaders_mtime ? fmtCachedAt(_leadersMeta.leaders_mtime) : '\u2014';
+    meta.innerHTML =
+      `<span style="color:var(--text-muted)">Last rebuild:</span> ${mtimeLabel}` +
+      ` &middot; <span style="color:var(--text-muted)">${_leadersMeta.universe_count}</span> ranked` +
+      ` &middot; <span style="color:var(--green-text)">${_leadersMeta.leaders_count}</span> selected`;
+
+    controls.style.display = '';
+    populateSectorDropdown();
+    updateFilterChipCounts();
+    renderLeadersTable();
+    _leadersLoaded = true;
+  } catch (err) {
+    content.innerHTML =
+      `<div class="error-box">Failed to load leader universe: ${err && err.message ? err.message : err}</div>`;
+  }
+}
+
+function _rowSector(r) {
+  return (r.sector || r.sic_description || r.sic || '').toString().trim();
+}
+
+function populateSectorDropdown() {
+  const select = document.getElementById('leadersSectorSelect');
+  if (!select || !_leadersData) return;
+  const prev = select.value || 'ALL';
+
+  // Scope the option set to rows matching the OTHER active filters (sel +
+  // verdict), so the dropdown only surfaces sectors that actually have
+  // companies under the current selection. Deliberately excludes the sector
+  // filter itself — otherwise the list would collapse to one entry.
+  const f = _leadersFilter;
+  const pool = _leadersData.filter(r => {
+    const sym = (r.symbol || '').toUpperCase();
+    if (f.sel === 'selected' && !_leadersSelected.has(sym)) return false;
+    if (f.verdict !== 'ALL' && (r.verdict || '') !== f.verdict) return false;
+    if (f.archetype !== 'ALL' && (r.archetype || '').toUpperCase() !== f.archetype) return false;
+    return true;
+  });
+
+  // Build sector → count for the remaining pool. Empty sectors never appear.
+  const counts = new Map();
+  for (const r of pool) {
+    const s = _rowSector(r);
+    if (!s) continue;
+    counts.set(s, (counts.get(s) || 0) + 1);
+  }
+  const sectors = Array.from(counts.keys()).sort();
+
+  const opts = [`<option value="ALL">All sectors (${pool.length})</option>`]
+    .concat(sectors.map(s =>
+      `<option value="${escapeHTML(s)}">${escapeHTML(s)} (${counts.get(s)})</option>`
+    ))
+    .join('');
+  select.innerHTML = opts;
+
+  // Preserve the previous sector pick if it still has matches; otherwise
+  // fall back to "All sectors" so the user isn't stuck with an invisible
+  // filter.
+  if (prev === 'ALL' || counts.has(prev)) {
+    select.value = prev;
+    _leadersFilter.sector = prev;
+  } else {
+    select.value = 'ALL';
+    _leadersFilter.sector = 'ALL';
+  }
+}
+
+function updateFilterChipCounts() {
+  if (!_leadersData) return;
+  const total = _leadersData.length;
+  const selected = _leadersData.reduce((n, r) =>
+    n + (_leadersSelected.has((r.symbol || '').toUpperCase()) ? 1 : 0), 0);
+  const elAll = document.getElementById('cntSelAll');
+  const elSel = document.getElementById('cntSelSelected');
+  if (elAll) elAll.textContent = `(${total})`;
+  if (elSel) elSel.textContent = `(${selected})`;
+}
+
+function applyLeadersFilters(rows) {
+  const f = _leadersFilter;
+  return rows.filter(r => {
+    const sym = (r.symbol || '').toUpperCase();
+    if (f.sel === 'selected' && !_leadersSelected.has(sym)) return false;
+    if (f.verdict !== 'ALL' && (r.verdict || '') !== f.verdict) return false;
+    if (f.archetype !== 'ALL' && (r.archetype || '').toUpperCase() !== f.archetype) return false;
+    if (f.sector !== 'ALL' && _rowSector(r) !== f.sector) return false;
+    return true;
+  });
+}
+
+function applyLeadersSort(rows) {
+  if (!_leadersSort) {
+    // Default: selected-first, score desc, mcap desc.
+    return rows.slice().sort((a, b) => {
+      const aSel = _leadersSelected.has((a.symbol || '').toUpperCase()) ? 1 : 0;
+      const bSel = _leadersSelected.has((b.symbol || '').toUpperCase()) ? 1 : 0;
+      if (aSel !== bSel) return bSel - aSel;
+      const aScore = parseFloat(a.good_firm_score) || 0;
+      const bScore = parseFloat(b.good_firm_score) || 0;
+      if (aScore !== bScore) return bScore - aScore;
+      const aCap = parseFloat(a.market_cap) || 0;
+      const bCap = parseFloat(b.market_cap) || 0;
+      return bCap - aCap;
+    });
+  }
+  const { col, dir } = _leadersSort;
+  const mul = dir === 'asc' ? 1 : -1;
+  const num = v => { const n = parseFloat(v); return isNaN(n) ? -Infinity : n; };
+  const str = v => (v == null ? '' : String(v)).toLowerCase();
+  return rows.slice().sort((a, b) => {
+    let av, bv;
+    switch (col) {
+      case 'symbol':      av = str(a.symbol);      bv = str(b.symbol);      return av < bv ? -mul : av > bv ? mul : 0;
+      case 'name':        av = str(a.name);        bv = str(b.name);        return av < bv ? -mul : av > bv ? mul : 0;
+      case 'sector':      av = str(_rowSector(a)); bv = str(_rowSector(b)); return av < bv ? -mul : av > bv ? mul : 0;
+      case 'archetype':   av = str(a.archetype);   bv = str(b.archetype);   return av < bv ? -mul : av > bv ? mul : 0;
+      case 'market_cap':       return (num(a.market_cap) - num(b.market_cap)) * mul;
+      case 'good_firm_score':  return (num(a.good_firm_score) - num(b.good_firm_score)) * mul;
+      case 'sector_rank':      return (num(a.market_cap_rank_in_sector) - num(b.market_cap_rank_in_sector)) * mul;
+      case 'verdict':     av = str(a.verdict); bv = str(b.verdict); return av < bv ? -mul : av > bv ? mul : 0;
+      default:            return 0;
+    }
+  });
+}
+
+function _sortArrow(col) {
+  if (!_leadersSort || _leadersSort.col !== col) return '';
+  return `<span class="ldr-sort-arrow">${_leadersSort.dir === 'asc' ? '\u25B2' : '\u25BC'}</span>`;
+}
+
+function _sortableTh(col, label, align='left', width='') {
+  const pad = 'padding:10px 8px';
+  return `<th class="ldr-sort-th" onclick="onLeadersSort('${col}')"
+              style="${pad};text-align:${align};font-size:10px;letter-spacing:1px;color:var(--text-muted);font-weight:600;${width}">
+              ${label}${_sortArrow(col)}
+          </th>`;
+}
+
+function renderLeadersTable() {
+  const content = document.getElementById('leadersContent');
+  const counter = document.getElementById('leadersVisibleCount');
+  if (!_leadersData || !_leadersData.length) {
+    content.innerHTML = '<div style="color:var(--text-faint);padding:20px;text-align:center">No tickers to display.</div>';
+    if (counter) counter.textContent = '';
+    return;
+  }
+
+  const filtered = applyLeadersFilters(_leadersData);
+  const rows = applyLeadersSort(filtered);
+
+  if (counter) {
+    counter.innerHTML = `<strong>${rows.length}</strong> of ${_leadersData.length} visible`;
+  }
+
+  if (!rows.length) {
+    content.innerHTML = `
+      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:24px;text-align:center;color:var(--text-faint)">
+        No tickers match the current filters. <button class="ldr-chip" onclick="resetLeadersFilters()" style="margin-left:8px">Clear filters</button>
+      </div>`;
+    return;
+  }
+
+  const header = `
+    <thead>
+      <tr style="background:var(--bg-cell)">
+        <th style="padding:10px 8px;text-align:center;font-size:10px;letter-spacing:1px;color:var(--text-muted);font-weight:600;width:40px">SEL</th>
+        ${_sortableTh('symbol',          'SYMBOL',      'left')}
+        ${_sortableTh('name',            'NAME',        'left')}
+        ${_sortableTh('sector',          'SECTOR',      'left')}
+        ${_sortableTh('market_cap',      'MKT CAP',     'right')}
+        ${_sortableTh('verdict',         'VERDICT',     'center')}
+        ${_sortableTh('good_firm_score', 'SCORE',       'right')}
+        ${_sortableTh('archetype',       'ARCHETYPE',   'left')}
+        ${_sortableTh('sector_rank',     'SECTOR RANK', 'right')}
+      </tr>
+    </thead>`;
+
+  const body = rows.map(r => {
+    const sym = (r.symbol || '').toUpperCase();
+    const isLeader = _leadersSelected.has(sym);
+    const verdict = r.verdict || '';
+    const score = (r.good_firm_score !== undefined && r.good_firm_score !== '' && r.good_firm_score !== null)
+      ? Number(r.good_firm_score).toFixed(2) : '\u2014';
+    const mcap = r.market_cap ? fmtCap(Number(r.market_cap)) : '\u2014';
+    const archetype = r.archetype || '\u2014';
+    const sector = _rowSector(r) || '\u2014';
+    const sectorRank = (r.market_cap_rank_in_sector !== undefined && r.market_cap_rank_in_sector !== '' && r.market_cap_rank_in_sector !== null)
+      ? r.market_cap_rank_in_sector : '\u2014';
+    const selCell = isLeader
+      ? '<span style="color:var(--green-text);font-size:14px;font-weight:700">\u2713</span>'
+      : '<span style="color:var(--text-ghost);font-size:12px">\u2013</span>';
+    const rowBg = isLeader ? 'background:rgba(34,197,94,0.04)' : '';
+    return `
+      <tr style="border-top:1px solid var(--border);${rowBg}">
+        <td style="padding:8px;text-align:center">${selCell}</td>
+        <td class="symbol-cell" style="padding:8px;font-weight:600;color:var(--text-primary)"
+            onclick="openSymbolDetail(event, '${escapeHTML(sym)}')" title="Click for fundamental detail">${escapeHTML(sym)}</td>
+        <td style="padding:8px;color:var(--text-secondary);font-size:12px">${escapeHTML(r.name || '')}</td>
+        <td style="padding:8px;color:var(--text-muted);font-size:11px">${escapeHTML(sector)}</td>
+        <td style="padding:8px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text-secondary)">${mcap}</td>
+        <td style="padding:8px;text-align:center">
+          <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;letter-spacing:0.5px;
+                        background:${verdictBg(verdict)};color:${verdictColor(verdict)};border:1px solid ${verdictBorder(verdict)}">
+            ${verdictShort(verdict)}
+          </span>
+        </td>
+        <td style="padding:8px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text-primary);font-weight:600">${score}</td>
+        <td style="padding:8px;color:var(--text-muted);font-size:11px">${escapeHTML(archetype)}</td>
+        <td style="padding:8px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text-muted)">${sectorRank}</td>
+      </tr>`;
+  }).join('');
+
+  content.innerHTML = `
+    <div class="tbl-wrap" id="leadersTblWrap">
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          ${header}
+          <tbody>${body}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+// ── Filter + sort event handlers ──
+function onLeadersFilterChip(btn) {
+  const filter = btn.dataset.filter;
+  const value  = btn.dataset.value;
+  if (!filter || value == null) return;
+  _leadersFilter[filter] = value;
+  // Update the active class within this filter group only.
+  document.querySelectorAll(`#leadersControls .ldr-chip[data-filter="${filter}"]`).forEach(b =>
+    b.classList.toggle('active', b.dataset.value === value));
+  // Sector dropdown depends on the sel + verdict filters, so resync it
+  // before rendering. (populateSectorDropdown also resets the sector filter
+  // to 'ALL' if the previously-selected sector no longer has any matches.)
+  populateSectorDropdown();
+  renderLeadersTable();
+}
+
+function onLeadersSectorChange(select) {
+  _leadersFilter.sector = select.value || 'ALL';
+  renderLeadersTable();
+}
+
+function onLeadersSort(col) {
+  if (_leadersSort && _leadersSort.col === col) {
+    _leadersSort.dir = _leadersSort.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    // Sensible defaults per column: numeric = desc, text = asc, sector_rank = asc.
+    const descFirst = ['market_cap', 'good_firm_score'];
+    const defaultDir = descFirst.includes(col) ? 'desc' : 'asc';
+    _leadersSort = { col, dir: defaultDir };
+  }
+  renderLeadersTable();
+}
+
+function resetLeadersFilters() {
+  _leadersFilter = { sel: 'all', verdict: 'ALL', archetype: 'ALL', sector: 'ALL' };
+  _leadersSort = null;
+  // Reset chip active states.
+  document.querySelectorAll('#leadersControls .ldr-chip').forEach(b => {
+    const isDefault = b.dataset.value === 'all' || b.dataset.value === 'ALL';
+    b.classList.toggle('active', isDefault);
+  });
+  const sel = document.getElementById('leadersSectorSelect');
+  if (sel) sel.value = 'ALL';
+  renderLeadersTable();
+}
+
+function escapeHTML(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// ── Rebuild + polling ──
+async function rebuildLeaders() {
+  const btn = document.getElementById('btnRebuildLeaders');
+  const status = document.getElementById('leadersStatus');
+  if (!confirm('Rebuild the leader universe?\n\nThis kicks off a multi-hour background job (metadata gather + SEC fetch + screen + select). You can keep using the app while it runs. Cold rebuild takes ~3.5 hours; warm reruns (using checkpoints + 90-day XBRL cache) take ~10 min.')) {
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Starting\u2026';
+  status.innerHTML = '';
+  try {
+    const res = await fetchTimeout(`${API_BASE}/api/leaders/rebuild`, 15000, { method: 'POST' });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      if (res.status === 409) {
+        status.innerHTML = `<div class="error-box" style="background:var(--yellow-bg);border-color:var(--yellow-border);color:var(--yellow-text)">A rebuild is already running. ${escapeHTML(txt)}</div>`;
+        btn.textContent = 'Rebuilding\u2026';
+        startRebuildPolling();
+        return;
+      }
+      status.innerHTML = `<div class="error-box">Rebuild failed to start (${res.status}). ${escapeHTML(txt)}</div>`;
+      btn.disabled = false;
+      btn.textContent = 'Rebuild Now';
+      return;
+    }
+    btn.textContent = 'Rebuilding\u2026';
+    startRebuildPolling();
+  } catch (err) {
+    status.innerHTML = `<div class="error-box">Could not reach /api/leaders/rebuild: ${escapeHTML(err && err.message ? err.message : String(err))}</div>`;
+    btn.disabled = false;
+    btn.textContent = 'Rebuild Now';
+  }
+}
+
+function startRebuildPolling() {
+  if (_rebuildPollTimer) return;  // already polling
+  // Immediate first poll so the user sees stage info right away.
+  pollRebuildStatusOnce();
+  _rebuildPollTimer = setInterval(pollRebuildStatusOnce, 5000);
+}
+
+function stopRebuildPolling() {
+  if (_rebuildPollTimer) {
+    clearInterval(_rebuildPollTimer);
+    _rebuildPollTimer = null;
+  }
+}
+
+async function pollRebuildStatusOnce() {
+  try {
+    const res = await fetchTimeout(`${API_BASE}/api/leaders/rebuild/status`, 10000);
+    if (!res.ok) return;
+    const snap = await res.json();
+    updateRebuildStatusUI(snap);
+
+    if (snap.status === 'done') {
+      stopRebuildPolling();
+      const btn = document.getElementById('btnRebuildLeaders');
+      btn.disabled = false;
+      btn.textContent = 'Rebuild Now';
+      // Reload universe/leaders data to reflect the fresh CSVs.
+      await loadLeaders(true);
+    } else if (snap.status === 'error' || snap.status === 'idle') {
+      stopRebuildPolling();
+      const btn = document.getElementById('btnRebuildLeaders');
+      btn.disabled = false;
+      btn.textContent = 'Rebuild Now';
+    }
+  } catch (_) {
+    // Transient network blips shouldn't kill polling; the next tick will retry.
+  }
+}
+
+function _fmtElapsed(sec) {
+  if (!sec || sec < 0) return '0s';
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function updateRebuildStatusUI(snap) {
+  const status = document.getElementById('leadersStatus');
+  if (!snap) { status.innerHTML = ''; return; }
+  if (snap.status === 'running') {
+    const stageLabel = _STAGE_LABELS[snap.stage] || (snap.stage || 'running');
+    const elapsed = _fmtElapsed(snap.elapsed_seconds);
+    const tail = snap.last_stdout_tail
+      ? `<pre style="margin-top:8px;padding:8px;background:var(--bg-cell);border-radius:4px;font-size:10px;color:var(--text-muted);white-space:pre-wrap;max-height:120px;overflow:auto">${escapeHTML(snap.last_stdout_tail)}</pre>`
+      : '';
+    status.innerHTML = `
+      <div style="padding:12px 14px;background:var(--bg-card);border:1px solid var(--blue);border-radius:6px;font-size:12px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="spinner" style="width:14px;height:14px"></div>
+          <div style="flex:1">
+            <div style="font-weight:600;color:var(--text-primary)">Rebuilding leader universe\u2026</div>
+            <div style="color:var(--text-muted);margin-top:2px">${escapeHTML(stageLabel)} &middot; elapsed ${elapsed}</div>
+          </div>
+        </div>
+        ${tail}
+      </div>`;
+  } else if (snap.status === 'done') {
+    status.innerHTML = `
+      <div style="padding:12px 14px;background:var(--green-bg);border:1px solid var(--green-border);border-radius:6px;color:var(--green-text);font-size:12px">
+        <strong>Rebuild complete.</strong> Universe and leader list have been refreshed.
+      </div>`;
+  } else if (snap.status === 'error') {
+    const tail = snap.last_stdout_tail
+      ? `<pre style="margin-top:8px;padding:8px;background:var(--bg-cell);border-radius:4px;font-size:10px;color:var(--text-muted);white-space:pre-wrap;max-height:160px;overflow:auto">${escapeHTML(snap.last_stdout_tail)}</pre>`
+      : '';
+    status.innerHTML = `
+      <div class="error-box">
+        <strong>Rebuild failed</strong>${snap.stage ? ` during <code>${escapeHTML(snap.stage)}</code>` : ''}: ${escapeHTML(snap.error || 'unknown error')}
+        ${tail}
+      </div>`;
+  } else {
+    status.innerHTML = '';
+  }
+}
+
+// ── Download the selected leaders as CSV (client-side from loaded data) ──
+function downloadLeadersCsv() {
+  if (!_leadersData || !_leadersSelected || !_leadersSelected.size) {
+    alert('No leaders selected yet. Run a rebuild first.');
+    return;
+  }
+  const rows = _leadersData.filter(r => _leadersSelected.has((r.symbol || '').toUpperCase()));
+  if (!rows.length) {
+    alert('leaders.csv references symbols not present in the loaded universe. Try refreshing the tab.');
+    return;
+  }
+  // Sort same as default table: score desc, mcap desc.
+  rows.sort((a, b) => {
+    const s = (parseFloat(b.good_firm_score) || 0) - (parseFloat(a.good_firm_score) || 0);
+    if (s !== 0) return s;
+    return (parseFloat(b.market_cap) || 0) - (parseFloat(a.market_cap) || 0);
+  });
+  const cols = ['symbol', 'name', 'sector', 'market_cap', 'verdict', 'good_firm_score', 'archetype', 'market_cap_rank_in_sector'];
+  const esc = v => {
+    if (v == null) return '';
+    const s = String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const csv = [cols.join(',')]
+    .concat(rows.map(r => cols.map(c => esc(c === 'sector' ? _rowSector(r) : r[c])).join(',')))
+    .join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `leaders_${stamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 

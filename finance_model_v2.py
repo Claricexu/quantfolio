@@ -104,18 +104,86 @@ def get_strategy_mode(symbol, override=None):
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TICKERS_CSV = os.path.join(SCRIPT_DIR, "Tickers.csv")
+LEADERS_CSV = os.path.join(SCRIPT_DIR, "leaders.csv")  # Phase 1.5 — Layer 1 handoff
 _DEFAULT_SYMBOLS = ["SPY","QQQ","AAPL","MSFT","GOOGL","AMZN","NVDA","META","TSLA","AMD","AVGO","JPM","UNH","XOM","TLT","GLD"]
 
+
+def _read_leaders_csv(path):
+    """Read symbol column from leaders.csv (Phase 1.4 output).
+    Returns [] on any failure so get_all_symbols() can fall through to Tickers.csv."""
+    import csv as _csv  # local import — top of file doesn't import csv
+    try:
+        with open(path, 'r', encoding='utf-8-sig', newline='') as f:
+            reader = _csv.DictReader(f)
+            if not reader.fieldnames or 'symbol' not in reader.fieldnames:
+                return []
+            out = []; seen = set()
+            for row in reader:
+                sym = (row.get('symbol') or '').strip().upper()
+                if sym and sym not in seen:
+                    seen.add(sym); out.append(sym)
+            return out
+    except Exception:
+        return []
+
+
+def _read_tickers_csv(path):
+    """Read plain-text ticker list (one per line, `#` = comment) from Tickers.csv.
+    Legacy format — precedes Phase 1.4. Returns [] on any failure."""
+    try:
+        with open(path, 'r', encoding='utf-8-sig') as f:
+            tickers = [l.strip().upper() for l in f
+                       if l.strip() and not l.strip().startswith('#')]
+        out = []; seen = set()
+        for t in tickers:
+            if t not in seen:
+                seen.add(t); out.append(t)
+        return out
+    except Exception:
+        return []
+
+
 def get_all_symbols():
+    """
+    Universe source (Phase 1.5 — Layer 1 handoff, union semantics).
+
+    Returns the UNION of (dedup, preserve order):
+      1. leaders.csv  — Phase 1.4 automated pick (≤100 Industry + Potential
+                        Leaders, refreshed quarterly by the Leader Detector)
+      2. Tickers.csv  — manual watchlist. Persists alongside leaders.csv so
+                        the user can keep symbols outside the screener's
+                        cut — experiments, pre-IPO, thematic plays, or
+                        names the rubric is too strict on today.
+
+    Overlap between the two is harmless: dedup below keeps each symbol
+    exactly once; leaders.csv ordering wins on ties (so automated picks
+    surface first in the UI).
+
+    Fallback: if BOTH files are missing or empty, returns _DEFAULT_SYMBOLS
+    (hardcoded 16-ticker safe list) so the server still boots.
+
+    Rollback: delete leaders.csv → only Tickers.csv's manual list surfaces.
+    No other Layer 2 code needs to change — scheduler, backtest, and all
+    three original tabs route through this function.
+    """
+    combined = []
+    seen = set()
+
+    if os.path.exists(LEADERS_CSV):
+        for sym in _read_leaders_csv(LEADERS_CSV):
+            if sym not in seen:
+                seen.add(sym)
+                combined.append(sym)
+
     if os.path.exists(TICKERS_CSV):
-        try:
-            with open(TICKERS_CSV, 'r', encoding='utf-8-sig') as f:
-                tickers = [l.strip().upper() for l in f if l.strip() and not l.strip().startswith('#')]
-            seen = set(); out = []
-            for t in tickers:
-                if t not in seen: seen.add(t); out.append(t)
-            if out: return out
-        except Exception: pass
+        for sym in _read_tickers_csv(TICKERS_CSV):
+            if sym not in seen:
+                seen.add(sym)
+                combined.append(sym)
+
+    if combined:
+        return combined
+
     return list(_DEFAULT_SYMBOLS)
 
 SYMBOL_UNIVERSE = {"Watchlist": get_all_symbols()}
@@ -148,8 +216,8 @@ def _cache_fresh(symbol, cache_dir, max_age_days=CACHE_DAYS):
             est_now = datetime.now() + timedelta(hours=3)
         est_today = est_now.date()
 
-        # Market closes at 4 PM EST. Data available ~4:30 PM EST.
-        market_closed = est_now.hour >= 17  # 5 PM EST to be safe
+        # Market closes at 4 PM EST. Yahoo posts data within ~1-3 min.
+        market_closed = est_now.hour >= 16
 
         if est_today.weekday() == 0:  # Monday
             exp = est_today - timedelta(days=3) if not market_closed else est_today
@@ -205,7 +273,11 @@ def _fetch_svr(symbol):
     try:
         tk = yf.Ticker(symbol); info = tk.info or {}
         mc = info.get('marketCap')
-        if not mc: return None, None, None
+        # Sector / Industry (stocks) or quote type (ETF)
+        sector = info.get('sector')
+        industry = info.get('industry')
+        quote_type = info.get('quoteType')  # "ETF", "EQUITY", "MUTUALFUND", etc.
+        if not mc: return None, None, None, sector, industry, quote_type
         qrev = None
         for attr in ('quarterly_income_stmt', 'quarterly_financials'):
             stmt = getattr(tk, attr, None)
@@ -215,10 +287,10 @@ def _fetch_svr(symbol):
                         v = stmt.loc[lab].dropna()
                         if len(v) > 0: qrev = float(v.iloc[0]); break
             if qrev: break
-        if not qrev or qrev <= 0: return None, mc, None
-        return round(mc / (qrev * 4), 2), mc, round(qrev, 0)
+        if not qrev or qrev <= 0: return None, mc, None, sector, industry, quote_type
+        return round(mc / (qrev * 4), 2), mc, round(qrev, 0), sector, industry, quote_type
     except Exception as e:
-        print(f"  [SVR] {symbol}: {e}"); return None, None, None
+        print(f"  [SVR] {symbol}: {e}"); return None, None, None, None, None, None
 
 # =============================================================================
 # V2 FEATURES (13)
@@ -469,7 +541,7 @@ def predict_ticker(symbol,cache_dir=None,verbose=True,version=None,strategy=None
                 "XGB":round(cp_price*(1+float(model[1].predict(ls)[0])),2)}
 
     # Signal: Z-score threshold + SVR filter + strategy mode
-    svr,mc,qr=_fetch_svr(symbol)
+    svr,mc,qr,sector,industry,quote_type=_fetch_svr(symbol)
     pp_pct=rp*100
     sok=(svr is None)or(svr<=7); ste=(svr is not None)and(svr>=15)
 
@@ -495,6 +567,7 @@ def predict_ticker(symbol,cache_dir=None,verbose=True,version=None,strategy=None
             "signal_rules":sig_rules,"strategy_mode":strat,"strategy_label":strat_label,
             "model_version":vl,"model_predictions":mpreds,
             "svr":svr,"market_cap":mc,"quarterly_revenue":qr,
+            "sector":sector,"industry":industry,"quote_type":quote_type,
             "backtest_mae_pct":round(float(mae_r)*100,3),"backtest_rmse_pct":round(float(rmse_r)*100,3),
             "direction_accuracy":round(float(dir_acc),1),
             "backtest_mae":round(float(mae_r)*cp_price,2),"backtest_rmse":round(float(rmse_r)*cp_price,2),
@@ -549,6 +622,9 @@ def predict_ticker_compare(symbol, cache_dir=None, verbose=False, strategy=None)
         'svr': r_v2.get('svr'),
         'market_cap': r_v2.get('market_cap'),
         'quarterly_revenue': r_v2.get('quarterly_revenue'),
+        'sector': r_v2.get('sector') or (r_v3 or {}).get('sector'),
+        'industry': r_v2.get('industry') or (r_v3 or {}).get('industry'),
+        'quote_type': r_v2.get('quote_type') or (r_v3 or {}).get('quote_type'),
         'consensus_signal': consensus,
         'confidence': confidence,
         'strategy_mode': strat,

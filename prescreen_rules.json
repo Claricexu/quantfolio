@@ -1,0 +1,18 @@
+{
+  "_comment": "Phase 1.1 pure-local 6-rule filter. All fields come from universe_raw.csv.",
+  "min_avg_dollar_volume_90d": 5000000,
+  "min_10q_count_strict_gt": 10,
+  "excluded_sic_ranges": [
+    [6020, 6030],
+    [6798, 6798],
+    [6199, 6199],
+    [6722, 6722],
+    [6726, 6726],
+    [6770, 6770]
+  ],
+  "blank_sic_excludes": true,
+  "max_svr": 50,
+  "finance_sector_range": [6000, 6999],
+  "finance_sector_top_n_by_revenue": 50,
+  "dedup_dual_class_by_cik": true
+}
