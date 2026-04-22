@@ -1,12 +1,17 @@
-pandas>=2.0
-numpy>=1.24
-scikit-learn>=1.3
-xgboost>=2.0
-lightgbm>=4.0
-ta>=0.11
-yfinance>=0.2.36
-fastapi>=0.109
-uvicorn>=0.27
-apscheduler>=3.10
-matplotlib>=3.7
+pandas==3.0.2
+numpy==2.4.4
+scikit-learn==1.8.0
+xgboost==3.2.0
+lightgbm==4.6.0
+ta==0.11.0
+yfinance==1.2.0
+fastapi==0.135.3
+uvicorn==0.42.0
+apscheduler==3.11.2
+matplotlib==3.10.8
+# python-dotenv is listed in requirements but NOT installed in the reference
+# env captured in requirements.lock (pip freeze found no record of it).
+# api_server.py guards `from dotenv import load_dotenv` with try/except so the
+# server boots without it. Leaving the >=1.0 constraint here so a fresh install
+# picks it up; re-pin once a version is actually installed and frozen. [C-7]
 python-dotenv>=1.0
