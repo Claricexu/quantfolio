@@ -459,6 +459,12 @@ CSV_OUT_FIELDS = [
     'fcf_margin_ttm', 'rule_40_score',
     'roic_ttm', 'svr', 'svr_vs_sector_median',
     'flag_diluting', 'flag_burning_cash', 'flag_spac_or_microcap',
+    # Bucket 2 (2026-04-21): serialized per-test + dealbreaker maps so the
+    # verdict card's test-dot row + flag chips can render from CSV alone
+    # (no live DB read). verdict_provider.load_verdict_for_symbol consumes
+    # these. Empty strings on legacy rows -> renders as dashes (graceful
+    # degradation via testDot(None) and flagChips on {}).
+    'tests_json', 'dealbreakers_json',
 ]
 
 
@@ -470,6 +476,16 @@ def write_screener_csv(scored, path):
         writer.writeheader()
         for m in scored:
             row = {k: m.get(k, '') for k in CSV_OUT_FIELDS}
+            # Serialize the per-test and dealbreaker maps as compact JSON
+            # so the verdict card renders from CSV alone. Kept JSON (not
+            # repeated columns) to keep schema stable as tests evolve.
+            tests = m.get('tests')
+            row['tests_json'] = json.dumps(tests, separators=(',', ':')) if tests else ''
+            dealbreakers = m.get('dealbreakers')
+            row['dealbreakers_json'] = (
+                json.dumps(dealbreakers, separators=(',', ':'))
+                if dealbreakers else ''
+            )
             # Normalize booleans and Nones for CSV cleanliness
             for k, v in list(row.items()):
                 if v is None:

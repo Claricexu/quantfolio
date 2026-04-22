@@ -140,6 +140,13 @@
   th.sortable { cursor:pointer; user-select:none; transition:color 0.15s; white-space:nowrap; }
   th.sortable:hover { color:var(--blue-light); }
   .sort-arrow { font-size:9px; margin-left:2px; transition:opacity 0.15s; }
+  /* Bucket 2 (2026-04-21): "As of YYYY-MM-DD HH:MM" freshness chip rendered
+     next to the Firm Score / Verdict column headers. Deliberately muted
+     so it reads as metadata, not as a sortable control. */
+  .as-of-chip { font-size:9px; font-weight:500; color:var(--text-faint);
+    letter-spacing:0.3px; text-transform:none; margin-left:6px;
+    padding:1px 6px; border:1px solid var(--border); border-radius:8px;
+    background:var(--bg-cell); white-space:nowrap; }
   tbody tr { transition: background 0.15s; }
   tbody tr:nth-child(even) { background: var(--bg-row-even); }
   tbody tr:nth-child(odd)  { background: var(--bg-row-odd); }
@@ -512,7 +519,11 @@ function verdictShort(v) {
     GEM:               'GEM',
     WATCH:             'WATCH',
     AVOID:             'AVOID',
-    INSUFFICIENT_DATA: '\u2014',
+    // Bucket 2 (2026-04-21): 'N/A' matches the dashed-amber pill copy used
+    // by the Leader Detector for INSUFFICIENT_DATA rows. The main Leader
+    // render path branches before calling this, but any future caller that
+    // doesn't branch will still emit consistent microcopy.
+    INSUFFICIENT_DATA: 'N/A',
     // Legacy fallbacks
     INDUSTRY_LEADER:   'LEADER',
     HIDDEN_GEM:        'GEM',
@@ -526,6 +537,28 @@ function testDot(pass) {
   if (pass === true)  return '<span style="color:var(--green-text);font-size:14px;font-weight:700">\u2713</span>';
   if (pass === false) return '<span style="color:var(--red-text);font-size:14px;font-weight:700">\u2717</span>';
   return '<span style="color:var(--text-ghost);font-size:14px">\u2013</span>';
+}
+
+// Sophia's locked reason-code copy (2026-04-21) — mirrored from
+// verdict_provider._REASON_TEXT so Leader Detector rows (which come from
+// /api/universe, not /api/screener/{sym}) can render the same microcopy
+// the verdict card uses without a per-row API round-trip.
+const REASON_TEXT = {
+  NO_SEC_FILINGS: "We don't have SEC filings for this symbol — likely an ETF, ADR, or non-US issuer. Fundamental verdict doesn't apply here.",
+  TAXONOMY_GAP: "This company files with the SEC, but reports revenue in a non-standard format our parser can't read yet. We're tracking it — no verdict for now.",
+  INSUFFICIENT_HISTORY: "Not enough reported quarters yet to grade fundamentals (we need ~3 years of filings). Check back after the next earnings cycle.",
+};
+
+// Derive reason code for a Leader Detector row. All Leader rows come from
+// screener_results.csv by definition, so NO_SEC_FILINGS is unreachable here
+// — we keep the fallback for safety. Mirrors verdict_provider.classify_reason.
+function reasonForLeaderRow(r) {
+  if (!r) return { code: 'NO_SEC_FILINGS', text: REASON_TEXT.NO_SEC_FILINGS };
+  const archetype = (r.archetype || '').toUpperCase();
+  if (archetype === 'UNKNOWN' || archetype === '') {
+    return { code: 'TAXONOMY_GAP', text: REASON_TEXT.TAXONOMY_GAP };
+  }
+  return { code: 'INSUFFICIENT_HISTORY', text: REASON_TEXT.INSUFFICIENT_HISTORY };
 }
 
 // Roll up SEC SIC codes into ~9 broad buckets (GICS-ish). SIC descriptions
@@ -622,12 +655,29 @@ function buildVerdictCard(v) {
   if (!v) return '';
   const verdict = v.verdict || 'INSUFFICIENT_DATA';
   if (verdict === 'INSUFFICIENT_DATA') {
+    // Dev-only: flag backend drift. Once the CSV schema is fully rolled out
+    // every INSUFFICIENT_DATA response should carry a `reason` code; if it
+    // doesn't, we want to hear about it loudly in localhost before shipping.
+    if (!v.reason && (location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+      console.warn('[verdict-card] INSUFFICIENT_DATA without reason code for', v.symbol, v);
+    }
+    const sym = v.symbol || '';
+    // Fallback is deliberately neutral: once Bucket 2 is fully rolled out
+    // every INSUFFICIENT_DATA response carries reason_text from the backend,
+    // and the console.warn above flags any drift in dev. The old generic
+    // "ETF/ADR" copy contradicted the CRWD/APA TAXONOMY_GAP case (companies
+    // that DO file with the SEC but trip the XBRL extension-taxonomy gap).
+    const reasonText = v.reason_text || v.hint
+      || 'No fundamental verdict available for this symbol.';
     return `
     <div class="card fade-in" style="margin-top:14px;border-left:3px solid var(--text-ghost)">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
-        <div style="font-size:12px;font-weight:600;color:var(--text-secondary);letter-spacing:0.5px">FUNDAMENTAL VERDICT</div>
-        <div style="font-size:10px;color:var(--text-ghost);letter-spacing:0.3px">${v.hint || 'No SEC data (ETF/ADR, or SEC refresh not yet run)'}</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px">
+        <div style="font-size:12px;font-weight:600;color:var(--text-secondary);letter-spacing:0.5px">
+          FUNDAMENTAL VERDICT${sym ? ` · <span style="color:var(--text-primary);font-family:var(--mono)">${escapeHTML(sym)}</span>` : ''}
+        </div>
+        <div style="font-size:10px;color:var(--text-ghost);letter-spacing:0.3px;text-transform:uppercase">${escapeHTML(v.reason || 'N/A')}</div>
       </div>
+      <div style="font-size:12px;color:var(--text-muted);line-height:1.5">${escapeHTML(reasonText)}</div>
     </div>`;
   }
 
@@ -992,7 +1042,20 @@ function buildCompareCard(d) {
 // =================================================================
 let reportLoaded = false;
 let _bestStratMap = {};  // symbol → {key, name, sharpe} from backtest library
-let _screenerMap = {};   // symbol → {verdict, score, archetype} from fundamental screener
+let _screenerMap = {};   // symbol → {verdict, score, archetype, reason, reason_text}
+let _screenerComputedAt = null;  // ISO mtime of screener_results.csv (for "As of" chips)
+
+// Format an ISO timestamp for the "As of" chips rendered next to the
+// Daily Report Firm Score header and the Leader Detector table header.
+// Returns the raw ISO string if parsing fails, so we fail visible rather
+// than silently dropping the chip.
+function fmtAsOf(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const pad = n => String(n).padStart(2, '0');
+  return `As of ${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 async function loadScreenerMap() {
   try {
@@ -1000,10 +1063,17 @@ async function loadScreenerMap() {
     if (!res.ok) return;
     const json = await res.json();
     const data = json.data || [];
+    _screenerComputedAt = json.computed_at || null;
     const m = {};
     for (const r of data) {
       if (r && r.symbol) {
-        m[r.symbol] = { verdict: r.verdict, score: r.good_firm_score, archetype: r.archetype };
+        m[r.symbol] = {
+          verdict: r.verdict,
+          score: r.good_firm_score,
+          archetype: r.archetype,
+          reason: r.reason || null,
+          reason_text: r.reason_text || null,
+        };
       }
     }
     _screenerMap = m;
@@ -1323,6 +1393,14 @@ function buildReportTable(rows) {
   const tid = `rptTbl${_reportTableId++}`;
   const trs = rows.map(buildReportRow).join('');
 
+  // Bucket 2: surface the screener_results.csv mtime on the Firm Score
+  // column header so users can tell at a glance whether the fundamental
+  // verdict column is fresh (e.g. after a leaders rebuild).
+  const asOfLabel = fmtAsOf(_screenerComputedAt);
+  const firmScoreLabel = asOfLabel
+    ? `Firm Score <span class="as-of-chip" title="${escapeHTML(asOfLabel)}">${escapeHTML(asOfLabel)}</span>`
+    : 'Firm Score';
+
   const cols = [
     { key: 'symbol',    label: 'Symbol' },
     { key: 'price',     label: 'Price' },
@@ -1333,7 +1411,7 @@ function buildReportTable(rows) {
     { key: 'consensus', label: 'Consensus' },
     { key: 'conf',      label: 'Conf' },
     { key: 'strategy',  label: 'Best Strategy' },
-    { key: 'gf_score',  label: 'Firm Score' },
+    { key: 'gf_score',  label: firmScoreLabel },
   ];
 
   const dataKey = `_rptData_${tid}`;
@@ -2269,6 +2347,19 @@ function renderLeadersTable() {
     return;
   }
 
+  // Bucket 2: stamp the screener_results.csv mtime directly on the VERDICT
+  // column header so users browsing the Leader Detector can see the data's
+  // freshness without leaving the tab. Prefer _screenerComputedAt (loaded
+  // by loadScreenerMap) but fall back to the leaders.csv mtime we already
+  // track via _leadersMeta.leaders_mtime — it's the closest proxy for
+  // "when did this table's fundamental columns come from?" if the screener
+  // map hasn't been fetched yet.
+  const ldrAsOfIso = _screenerComputedAt || (_leadersMeta && _leadersMeta.leaders_mtime) || null;
+  const ldrAsOfLabel = fmtAsOf(ldrAsOfIso);
+  const verdictLabel = ldrAsOfLabel
+    ? `VERDICT <span class="as-of-chip" title="${escapeHTML(ldrAsOfLabel)}">${escapeHTML(ldrAsOfLabel)}</span>`
+    : 'VERDICT';
+
   const header = `
     <thead>
       <tr style="background:var(--bg-cell)">
@@ -2277,7 +2368,7 @@ function renderLeadersTable() {
         ${_sortableTh('name',            'NAME',        'left')}
         ${_sortableTh('sector',          'SECTOR',      'left')}
         ${_sortableTh('market_cap',      'MKT CAP',     'right')}
-        ${_sortableTh('verdict',         'VERDICT',     'center')}
+        ${_sortableTh('verdict',         verdictLabel,  'center')}
         ${_sortableTh('good_firm_score', 'SCORE',       'right')}
         ${_sortableTh('archetype',       'ARCHETYPE',   'left')}
         ${_sortableTh('sector_rank',     'SECTOR RANK', 'right')}
@@ -2299,6 +2390,27 @@ function renderLeadersTable() {
       ? '<span style="color:var(--green-text);font-size:14px;font-weight:700">\u2713</span>'
       : '<span style="color:var(--text-ghost);font-size:12px">\u2013</span>';
     const rowBg = isLeader ? 'background:rgba(34,197,94,0.04)' : '';
+    // Bucket 2: INSUFFICIENT_DATA rows (CRWD/APA et al.) get a distinct
+    // dashed-amber N/A pill with Sophia's reason_text as a tooltip, so
+    // users can tell at a glance which rows are 'no verdict -- data gap'
+    // vs 'no verdict -- not scored'. The click-through still opens the
+    // full verdict card with the visible microcopy.
+    let verdictCell;
+    if (verdict === 'INSUFFICIENT_DATA') {
+      const reason = reasonForLeaderRow(r);
+      verdictCell = `
+        <span title="${escapeHTML(reason.text)}"
+              style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;letter-spacing:0.5px;
+                     background:rgba(250,204,21,0.1);color:var(--yellow-text);border:1px dashed var(--yellow-border)">
+          N/A
+        </span>`;
+    } else {
+      verdictCell = `
+        <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;letter-spacing:0.5px;
+                      background:${verdictBg(verdict)};color:${verdictColor(verdict)};border:1px solid ${verdictBorder(verdict)}">
+          ${verdictShort(verdict)}
+        </span>`;
+    }
     return `
       <tr style="border-top:1px solid var(--border);${rowBg}">
         <td style="padding:8px;text-align:center">${selCell}</td>
@@ -2307,12 +2419,7 @@ function renderLeadersTable() {
         <td style="padding:8px;color:var(--text-secondary);font-size:12px">${escapeHTML(r.name || '')}</td>
         <td style="padding:8px;color:var(--text-muted);font-size:11px">${escapeHTML(sector)}</td>
         <td style="padding:8px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text-secondary)">${mcap}</td>
-        <td style="padding:8px;text-align:center">
-          <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;letter-spacing:0.5px;
-                        background:${verdictBg(verdict)};color:${verdictColor(verdict)};border:1px solid ${verdictBorder(verdict)}">
-            ${verdictShort(verdict)}
-          </span>
-        </td>
+        <td style="padding:8px;text-align:center">${verdictCell}</td>
         <td style="padding:8px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text-primary);font-weight:600">${score}</td>
         <td style="padding:8px;color:var(--text-muted);font-size:11px">${escapeHTML(archetype)}</td>
         <td style="padding:8px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text-muted)">${sectorRank}</td>

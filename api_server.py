@@ -61,12 +61,19 @@ from finance_model_v2 import (
 # Loads edgar_fetcher + fundamental_screener. Failure here does NOT affect the
 # three existing tabs — endpoints below simply return 503 if unavailable.
 try:
-    from fundamental_screener import run_full_screen as _screener_run_full
+    # fundamental_screener import kept as a module-availability gate even
+    # though Bucket 2 serves /api/screener from the CSV via verdict_provider.
+    # run_full_screen stays importable for the leaders rebuild subprocess.
+    from fundamental_screener import run_full_screen as _screener_run_full  # noqa: F401
     from edgar_fetcher import (
         fetch_all as _edgar_fetch_all,
         get_db as _edgar_get_db,
         load_tickers_from_csv as _edgar_load_tickers,
     )
+    # Bucket 2 (2026-04-21): CSV-backed unified verdict reader. All three
+    # tabs (Lookup, Daily Report, Leader Detector) flow through this module
+    # so they can never disagree on what verdict/reason a symbol has.
+    import verdict_provider as _verdict_provider
     HAS_SCREENER = True
 except Exception as _screener_err:
     print(f"[Screener] Not available: {_screener_err}")
@@ -384,6 +391,23 @@ async def lifespan(app: FastAPI):
     _ensure_cache_dir(CACHE_DIR)
     _start_scheduler()
     _load_latest_scan_from_disk()
+    # Bucket 2: warn once if screener_results.csv predates the tests_json /
+    # dealbreakers_json columns. Non-fatal — verdict_provider handles the
+    # missing columns by rendering dashes in the test-dot row / flag chips.
+    if HAS_SCREENER:
+        try:
+            ok, missing = _verdict_provider.csv_has_required_columns()
+            if not ok:
+                print(
+                    "[startup] screener_results.csv missing "
+                    + "/".join(missing)
+                    + " columns — test-dot row and flag chips will render "
+                    "as dashes until next screener run. Regenerate with: "
+                    "python fundamental_screener.py --universe "
+                    "universe_prescreened.csv --csv-out screener_results.csv"
+                )
+        except Exception as exc:  # never block startup on this
+            print(f"[startup] verdict_provider column check failed: {exc}")
     yield
 
 
@@ -1102,13 +1126,12 @@ async def api_backtest_batch_status():
 # SEC refresh trigger). Does NOT affect any existing endpoint, scheduler, or
 # cache. If the screener modules are unavailable, endpoints return 503.
 
-_screener_lock = threading.Lock()
-_screener_cache = {
-    "data": None,          # list[dict] of scored tickers
-    "computed_at": None,   # ISO timestamp
-    "is_running": False,
-}
-_SCREENER_TTL_HOURS = 6
+# Bucket 2 (2026-04-21): the prior 6h in-memory TTL cache that recomputed
+# the 85-ticker screen on miss is gone. ``verdict_provider.load_screener_index``
+# is the single cache now, keyed by screener_results.csv mtime — so the
+# Lookup/Report/Leader tabs can never disagree, and /api/screener/{sym}
+# responses stay sub-millisecond after the first load. ``POST /api/screener/refresh``
+# (SEC pull) is untouched; it's the refresh surface that still exists.
 
 _edgar_lock = threading.Lock()
 _edgar_state = {
@@ -1120,35 +1143,6 @@ _edgar_state = {
     "results": None,
     "error": None,
 }
-
-
-def _screener_cache_fresh():
-    if not _screener_cache["data"] or not _screener_cache["computed_at"]:
-        return False
-    try:
-        dt = datetime.fromisoformat(_screener_cache["computed_at"])
-    except Exception:
-        return False
-    age_h = (datetime.now() - dt).total_seconds() / 3600.0
-    return age_h < _SCREENER_TTL_HOURS
-
-
-def _screener_compute_sync():
-    """Compute a full screen from the local SQLite cache and store in memory.
-    Fast (~5s) — only reads the DB; does not hit SEC."""
-    with _screener_lock:
-        if _screener_cache["is_running"]:
-            return _screener_cache["data"]
-        _screener_cache["is_running"] = True
-    try:
-        data = _screener_run_full()
-        with _screener_lock:
-            _screener_cache["data"] = data
-            _screener_cache["computed_at"] = datetime.now().isoformat()
-        return data
-    finally:
-        with _screener_lock:
-            _screener_cache["is_running"] = False
 
 
 def _edgar_refresh_worker(symbols):
@@ -1180,10 +1174,9 @@ def _edgar_refresh_worker(symbols):
         conn.close()
         with _edgar_lock:
             _edgar_state["results"] = results
-        # Invalidate screener cache so next GET recomputes from fresh SEC data
-        with _screener_lock:
-            _screener_cache["data"] = None
-            _screener_cache["computed_at"] = None
+        # Bucket 2: no in-memory screener cache to invalidate. The next
+        # pipeline run will rewrite screener_results.csv and the mtime
+        # change automatically invalidates verdict_provider's cache.
     except Exception as e:
         with _edgar_lock:
             _edgar_state["error"] = str(e)
@@ -1195,52 +1188,59 @@ def _edgar_refresh_worker(symbols):
 
 @app.get("/api/screener")
 async def api_screener(refresh: bool = False):
-    """Full Good Firm screener table (all tickers). Cached 6h."""
+    """Full Good Firm screener table — served from screener_results.csv.
+
+    The response shape is unchanged: ``{data: [...], computed_at: ISO,
+    cached: bool}``. ``computed_at`` now reflects the on-disk CSV mtime
+    (rather than a memory-cache write timestamp), so the UI can render
+    "As of HH:MM" off it.
+
+    ``?refresh=true`` is retained for backward compat (old clients
+    occasionally pass it as a cache-buster). It no longer recomputes
+    anything — it just forces a CSV re-read even when the mtime hasn't
+    changed. Actual data refresh lives on ``POST /api/screener/refresh``
+    (SEC pull) and the leaders rebuild pipeline.
+    """
     if not HAS_SCREENER:
         raise HTTPException(503, "Screener module unavailable")
-    if not refresh and _screener_cache_fresh():
-        return JSONResponse({
-            "data": _screener_cache["data"],
-            "computed_at": _screener_cache["computed_at"],
-            "cached": True,
-        })
-    data = _screener_compute_sync()
+    index = _verdict_provider.load_screener_index(force_reload=refresh)
+    data = list(index.values())
+    computed_at = _verdict_provider.get_csv_mtime_iso()
     if not data:
         return JSONResponse({
             "data": [],
-            "computed_at": datetime.now().isoformat(),
-            "cached": False,
-            "hint": "No fundamentals cached yet — POST /api/screener/refresh to pull SEC data.",
+            "computed_at": computed_at,
+            "cached": not refresh,
+            "hint": "No fundamentals cached yet — POST /api/screener/refresh "
+                    "to pull SEC data, then run the screener.",
         })
     return JSONResponse({
         "data": data,
-        "computed_at": _screener_cache["computed_at"],
-        "cached": False,
+        "computed_at": computed_at,
+        "cached": not refresh,
     })
 
 
 @app.get("/api/screener/{symbol}")
 async def api_screener_symbol(symbol: str, refresh: bool = False):
-    """Single-ticker Good Firm verdict + full 15-metric breakdown."""
+    """Single-ticker Good Firm verdict.
+
+    Always returns a 200 with a verdict dict — missing symbols come back
+    as INSUFFICIENT_DATA carrying a ``reason`` code (NO_SEC_FILINGS,
+    TAXONOMY_GAP, INSUFFICIENT_HISTORY) and matching ``reason_text`` so
+    the frontend can render Sophia's human-friendly copy without a
+    second round-trip."""
     if not HAS_SCREENER:
         raise HTTPException(503, "Screener module unavailable")
     symbol = symbol.upper().strip()
     if not symbol.isalnum() or len(symbol) > 6:
         raise HTTPException(400, "Invalid ticker symbol")
-
-    # Use cached full-screen if fresh (has sector context); else recompute once
-    if refresh or not _screener_cache_fresh():
-        _screener_compute_sync()
-    data = _screener_cache.get("data") or []
-    hit = next((m for m in data if m.get('symbol') == symbol), None)
-    if not hit:
-        return JSONResponse({
-            "symbol": symbol,
-            "verdict": "INSUFFICIENT_DATA",
-            "hint": "Ticker not in screener output — may be an ETF/ADR, or run SEC refresh.",
-            "computed_at": _screener_cache.get("computed_at"),
-        })
-    return JSONResponse(hit)
+    if refresh:
+        # Backward compat — force an mtime-cache reload. The SEC refresh
+        # endpoint is POST /api/screener/refresh and is a different surface.
+        _verdict_provider.load_screener_index(force_reload=True)
+    payload = _verdict_provider.load_verdict_for_symbol(symbol)
+    return JSONResponse(payload)
 
 
 @app.post("/api/screener/refresh")
