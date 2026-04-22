@@ -398,6 +398,13 @@ function fetchTimeout(url, ms = 60000, opts = {}) {
   // (otherwise the abort timer wouldn't fire).
   return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(timer));
 }
+// Same return shape as fetchTimeout but with no abort timer — for long-poll
+// endpoints where the server can legitimately take minutes (report scan,
+// backtest). Any caller-supplied `signal` is preserved so a manual cancel
+// button can wire in later (see H-13).
+function fetchNoTimeout(url, opts = {}) {
+  return fetch(url, opts);
+}
 function fmt$(v) { return v != null ? '$' + Number(v).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) : '\u2014'; }
 function fmtCachedAt(iso) {
   if (!iso) return '';
@@ -998,14 +1005,24 @@ async function loadScreenerMap() {
 async function loadReport() {
   if (reportLoaded) return;
   const el = document.getElementById('reportContent');
-  el.innerHTML = loaderHTML('Loading Lite + Pro report\u2026');
+  el.innerHTML = loaderHTML('Loading Lite + Pro report\u2026') +
+    `<div id="loadReportPollStatus" style="font-size:11px;color:var(--text-faint);margin-top:6px;text-align:center"></div>`;
+  let lastOk = Date.now();
+  const tick = setInterval(() => {
+    const pse = document.getElementById('loadReportPollStatus');
+    if (!pse) return;
+    const s = Math.round((Date.now() - lastOk) / 1000);
+    pse.textContent = `Still working, last checked ${s} seconds ago`;
+  }, 1000);
   try {
     // Fetch report and screener in parallel — screener is non-blocking
     const [res] = await Promise.all([
-      fetchTimeout(`${API_BASE}/api/report`),
+      fetchNoTimeout(`${API_BASE}/api/report`),
       loadScreenerMap(),
     ]);
+    lastOk = Date.now();
     const json = await res.json();
+    clearInterval(tick);
     _bestStratMap = json.best_strategies || {};
     if (json.data) {
       renderReport(json);
@@ -1014,6 +1031,7 @@ async function loadReport() {
       el.innerHTML = `<div class="scan-banner">No report data yet. Click "Generate Report" to run the first Lite + Pro scan (takes 40\u201390 min).</div>`;
     }
   } catch (e) {
+    clearInterval(tick);
     el.innerHTML = `<div class="error-box">Failed to load report: ${e.message}</div>`;
   }
 }
@@ -1034,14 +1052,27 @@ async function refreshReport() {
 function pollReport(statusEl) {
   let attempts = 0;
   let failCount = 0;
+  let lastOk = Date.now();
+  // Subtle "still working" indicator; appended once under the scan banner.
+  if (statusEl && !document.getElementById('pollReportStatus')) {
+    statusEl.insertAdjacentHTML('beforeend', `<div id="pollReportStatus" style="font-size:11px;color:var(--text-faint);margin-top:6px"></div>`);
+  }
+  const statusTick = setInterval(() => {
+    const pse = document.getElementById('pollReportStatus');
+    if (!pse) return;
+    const s = Math.round((Date.now() - lastOk) / 1000);
+    pse.textContent = `Still working, last checked ${s} seconds ago`;
+  }, 1000);
   const iv = setInterval(async () => {
     attempts++;
     try {
-      const res = await fetchTimeout(`${API_BASE}/api/report`);
+      const res = await fetchNoTimeout(`${API_BASE}/api/report`);
       const json = await res.json();
+      lastOk = Date.now();
       failCount = 0;
       if (json.status === 'ok' && json.data && json.data.data && json.data.data.length > 0) {
         clearInterval(iv);
+        clearInterval(statusTick);
         statusEl.innerHTML = '';
         _bestStratMap = json.best_strategies || {};
         await loadScreenerMap();
@@ -1049,12 +1080,14 @@ function pollReport(statusEl) {
         reportLoaded = true;
       } else if (attempts > 360) { // 30 min timeout on polling
         clearInterval(iv);
+        clearInterval(statusTick);
         statusEl.innerHTML = '<div class="scan-banner">Still running. Refresh the page later to check results.</div>';
       }
     } catch (_) {
       failCount++;
       if (failCount >= 5) {
         clearInterval(iv);
+        clearInterval(statusTick);
         statusEl.innerHTML = '<div class="error-box">Lost connection to server. Refresh the page to retry.</div>';
       }
     }
@@ -1319,10 +1352,12 @@ function buildReportTable(rows) {
 let _btSymbol = null;
 let _btChart = null;
 let _btPollTimer = null;
+let _btStatusTick = null;
 
 function showBacktestButton(symbol) {
   _btSymbol = symbol;
   if (_btPollTimer) { clearInterval(_btPollTimer); _btPollTimer = null; }
+  if (_btStatusTick) { clearInterval(_btStatusTick); _btStatusTick = null; }
   if (_btChart) { _btChart.destroy(); _btChart = null; }
   const section = document.getElementById('backtestSection');
   section.innerHTML = `
@@ -1361,18 +1396,34 @@ async function runBacktest() {
 
 async function pollBacktest() {
   if (_btPollTimer) { clearInterval(_btPollTimer); _btPollTimer = null; }
+  if (_btStatusTick) { clearInterval(_btStatusTick); _btStatusTick = null; }
   let failCount = 0;
+  let lastOk = Date.now();
+  // Append subtle "still working" indicator inside the progress loader.
+  const prog = document.getElementById('btProgress');
+  if (prog && !document.getElementById('btPollStatus')) {
+    prog.insertAdjacentHTML('beforeend', `<div id="btPollStatus" style="font-size:11px;color:var(--text-faint);margin-top:6px"></div>`);
+  }
+  _btStatusTick = setInterval(() => {
+    const pse = document.getElementById('btPollStatus');
+    if (!pse) return;
+    const s = Math.round((Date.now() - lastOk) / 1000);
+    pse.textContent = `Still working, last checked ${s} seconds ago`;
+  }, 1000);
 
   const check = async () => {
     try {
-      const res = await fetchTimeout(`${API_BASE}/api/backtest-chart/${encodeURIComponent(_btSymbol)}`);
+      const res = await fetchNoTimeout(`${API_BASE}/api/backtest-chart/${encodeURIComponent(_btSymbol)}`);
       const json = await res.json();
+      lastOk = Date.now();
       failCount = 0;
       if (json.status === 'done') {
         if (_btPollTimer) { clearInterval(_btPollTimer); _btPollTimer = null; }
+        if (_btStatusTick) { clearInterval(_btStatusTick); _btStatusTick = null; }
         renderBacktestChart(json);
       } else if (json.status === 'error') {
         if (_btPollTimer) { clearInterval(_btPollTimer); _btPollTimer = null; }
+        if (_btStatusTick) { clearInterval(_btStatusTick); _btStatusTick = null; }
         const p = document.getElementById('btProgress');
         if (p) p.innerHTML = `<div class="error-box">Backtest failed: ${json.error}</div>`;
       } else if (json.status === 'running' && json.progress) {
@@ -1383,6 +1434,7 @@ async function pollBacktest() {
       failCount++;
       if (failCount >= 5) {
         if (_btPollTimer) { clearInterval(_btPollTimer); _btPollTimer = null; }
+        if (_btStatusTick) { clearInterval(_btStatusTick); _btStatusTick = null; }
         const p = document.getElementById('btProgress');
         if (p) p.innerHTML = `<div class="error-box">Lost connection to server. Refresh the page to retry.</div>`;
       }
