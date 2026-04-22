@@ -167,8 +167,10 @@ CREATE INDEX IF NOT EXISTS idx_facts_symbol_form_metric ON facts(symbol, form, m
 
 def get_db():
     """Open the fundamentals SQLite DB, creating schema if missing."""
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     conn.executescript(SCHEMA)
     return conn
 
