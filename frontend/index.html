@@ -358,7 +358,7 @@
 
   <!-- Footer -->
   <div class="footer">
-    <p><strong>Quantfolio</strong> &mdash; ML-powered signal engine comparing two ensemble models across 78+ tickers</p>
+    <p><strong>Quantfolio</strong> &mdash; ML-powered signal engine comparing two ensemble models across <span id="footerTickerCount">174</span>+ tickers</p>
     <p>Pro: Stacking Ensemble (LightGBM + XGBoost + RF, 22 features) | Lite: RF + XGBoost (13 features) | Walk-forward trained from 2010</p>
     <p style="margin-top:8px;color:var(--text-ghost)">For educational and research purposes only. Not investment advice.</p>
   </div>
@@ -2544,6 +2544,18 @@ function downloadLeadersCsv() {
 
 // Focus input on load
 document.getElementById('tickerInput').focus();
+
+// Refresh footer ticker count from the live universe. Cheap, fire-and-forget;
+// on failure the hardcoded fallback (last measured count) stays visible.
+fetchTimeout(`${API_BASE}/api/symbols`, 5000)
+  .then(r => r && r.ok ? r.json() : null)
+  .then(j => {
+    if (j && typeof j.count === 'number') {
+      const el = document.getElementById('footerTickerCount');
+      if (el) el.textContent = j.count;
+    }
+  })
+  .catch(() => {});
 </script>
 </body>
 </html>
