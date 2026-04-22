@@ -481,24 +481,20 @@ def predict_ticker(symbol,cache_dir=None,verbose=True,version=None,strategy=None
     # Build prediction history for Z-score (using recent validation predictions)
     pred_history=list(yp[-ZSCORE_LOOKBACK:])
 
-    # Quick backtest on validation using Z-score signals (respects strategy mode)
+    # Quick backtest on validation via BacktestEngine (C-3 Phase 3).
+    # Engine enforces MIN_ZSCORE_SAMPLES uniformly; seed_from_validation=False
+    # mirrors the old inline loop's head-seeded pred_history so steps from
+    # index seed_n onward are byte-identical. Leading seed_n rows (old loop's
+    # "seed phase") are trimmed here to preserve predict_ticker's return shape.
+    from backtest_engine import BacktestConfig, BacktestEngine, full_signal as _bt_full, buy_only as _bt_buyonly
     seed_n=min(20,max(5,len(Xvl)//3))  # adaptive seed for short-history tickers
-    btc,bts=10000.0,0.0; btp=[]; bt_pred_hist=list(yp[:seed_n])  # seed
-    for j in range(seed_n,len(Xvl)):
-        pr=yp[j]; bp=float(dc['Close'].iloc[vs+j]) if vs+j<len(dc) else float(dc['Close'].iloc[-1])
-        bt_pred_hist.append(pr)
-        if len(bt_pred_hist)>ZSCORE_LOOKBACK: bt_pred_hist=bt_pred_hist[-ZSCORE_LOOKBACK:]
-        hist=np.array(bt_pred_hist[:-1])
-        mu,sigma=np.mean(hist),np.std(hist)
-        z=(pr-mu)/sigma if sigma>1e-10 else 0.0
-        if strat == 'buy_only':
-            # Buy-Only: only buy on strong Z-score, never sell
-            if z>=THRESHOLD and btc>0: bts=btc/bp; btc=0
-        else:
-            # Full Signal: buy and sell on Z-score
-            if z>=THRESHOLD and btc>0: bts=btc/bp; btc=0
-            elif z<=-THRESHOLD and bts>0: btc=bts*bp; bts=0
-        btp.append(btc+bts*bp)
+    _bt_cfg=BacktestConfig(symbol=symbol,strategy_name=strat,initial_cash=10000.0,
+                           threshold=THRESHOLD,zscore_lookback=ZSCORE_LOOKBACK,
+                           min_zscore_samples=MIN_ZSCORE_SAMPLES,retrain_freq_days=None,
+                           min_train_days=MIN_TRAIN_DAYS,seed_from_validation=False,
+                           random_state=42,ensemble_builder='oof',feature_version=ver)
+    _bt_res=BacktestEngine(_bt_cfg,dc).run(_bt_buyonly if strat=='buy_only' else _bt_full)
+    btp=_bt_res.portfolio_curve[seed_n:]  # drop leading seed-phase rows
     bt_ret=(btp[-1]/10000-1)*100 if btp else 0
     tc=dc['Close'].values[vs+seed_n:vs+seed_n+len(btp)]
     bnh_ret=(tc[-1]/tc[0]-1)*100 if len(tc)>0 else 0
