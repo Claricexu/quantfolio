@@ -1,31 +1,77 @@
 """
 Capture pre-refactor baselines for C-3 backtest unification.
 
-Phase 1 of the BacktestEngine refactor. Runs each of the three currently-
-drifted backtest paths inside finance_model_v2.py against 5 anchor tickers
-and saves per-path / per-ticker JSON snapshots. After the refactor lands,
-the same tickers are re-run through the unified BacktestEngine and the
-deltas are inspected — a non-trivial delta is the exact bug we're fixing.
+Phase 1 (+ addendum) of the BacktestEngine refactor. Runs each of the three
+currently-drifted backtest paths inside finance_model_v2.py against a set of
+anchor tickers and saves per-path / per-ticker JSON snapshots. After the
+refactor lands, the same tickers are re-run through the unified BacktestEngine
+and the deltas are inspected — a non-trivial delta is the exact bug we're
+fixing.
+
+Ticker roster
+-------------
+- Large-cap US equities:   SPY, MSFT, JNJ, KO, AAPL, NVDA
+  (NVDA added in the Phase 1 addendum — volatile large-cap that appears in
+  first-time search telemetry and exercises the trend-following branches more
+  aggressively than the other 5.)
+
+- Synthetic short-history: SHORTHIST_AAPL
+  (Materialised at capture time from the last ~3 years of data_cache/AAPL.csv
+  and written to tests/backtest_baselines/_shorthist_cache/SHORTHIST_AAPL.csv,
+  which is then passed to the underlying loaders via cache_dir=.
+
+  Purpose: none of SPY/MSFT/JNJ/KO/AAPL/NVDA exercises the
+  MIN_ZSCORE_SAMPLES=20 guard because at the first retrain pred_history is
+  seeded with min(i-vs, ZSCORE_LOOKBACK) items. With the production floor
+  MIN_TRAIN_DAYS=126 and the module's vs=int(i*0.85) rule, the seed is always
+  >= 19 — so after a single append the guard check (`len >= 20`) always
+  passes. The guard is effectively dormant in the real module's default
+  configuration for every ticker with enough data to run.
+
+  To make the guard actively FIRE (force HOLD for multiple opening bars),
+  the capture also monkey-patches fm.MIN_TRAIN_DAYS=80 for the duration of
+  the SHORTHIST capture ONLY, via _patched_min_train_days(). With bsi=80 and
+  vs=68, the seed becomes 12, so iterations k=0..6 run under the guard
+  (HOLD, z=0.0) and iteration k=7 is the first to pass the guard. This is
+  the regime Phase 3's bug-fix is targeted at: predict_ticker's inline loop
+  currently has NO guard (uses an adaptive seed_n instead) so on this ticker
+  it would fire real z-score signals with only 5-19 samples of history —
+  statistically meaningless. The refactored engine will apply the guard
+  uniformly, and the diff between the pre-refactor predict_inline baseline
+  and the post-refactor output on SHORTHIST_AAPL is the receipt for the
+  bug-fix claim.
+
+  The "SHORTHIST_" prefix is intentional so a human reading the JSON knows
+  it is synthetic and not to attempt to map it to a real-world backtest
+  result. Sanity ALWAYS runs on SHORTHIST_AAPL (overriding the KO-only
+  default) because it's the one ticker whose baseline meaningfully depends
+  on the patched constant, so we want fresh cross-verification every run.)
 
 Paths captured
 --------------
-1. predict_ticker_inline   -> the validation-window loop at finance_model_v2.py:484-502
-                              inside predict_ticker. One-shot train on 85% of data,
-                              backtest on the remaining 15%. No MIN_ZSCORE_SAMPLES guard.
-2. backtest_symbol         -> walk-forward loop at finance_model_v2.py:766-801.
-                              Uses build_stacking_ensemble (OOF-stacked) for v3.
-3. backtest_multi_strategy -> walk-forward loop at finance_model_v2.py:854-902.
-                              Uses build_stacking_ensemble_fast (val-MAE weights) for v3.
-                              Captured from the 'full' sub-portfolio only (the buy_only
-                              sub-portfolio is sibling output and would be captured by
-                              the same engine call after refactor).
+1. predict_ticker_inline       -> the validation-window loop at finance_model_v2.py:484-502
+                                  inside predict_ticker. One-shot train on 85% of data,
+                                  backtest on the remaining 15%. No MIN_ZSCORE_SAMPLES guard.
+2. backtest_symbol             -> walk-forward loop at finance_model_v2.py:766-801.
+                                  Uses build_stacking_ensemble (OOF-stacked) for v3.
+3. backtest_multi_strategy     -> walk-forward loop at finance_model_v2.py:854-902,
+                                  'full' sub-portfolio.
+                                  Uses build_stacking_ensemble_fast (val-MAE weights) for v3.
+4. backtest_multi_strategy_buyonly
+                              -> Same walk-forward loop as (3), but captures the
+                                  'buy_only' sub-portfolio that Strategy Lab renders
+                                  alongside 'full'. Emitted as a separate JSON
+                                  (<TICKER>_multi_strategy_buyonly.json) so both curves
+                                  from the same model run can be diffed independently
+                                  post-refactor.
 
 Determinism
 -----------
-All underlying models use random_state=42 and all price data is loaded
-from data_cache/<SYMBOL>.csv (no network fetch during capture). Re-running
-this script produces byte-identical JSONs. This is *why* captured baselines
-are a meaningful regression barrier for the Phase 3 refactor.
+All underlying models use random_state=42 and all price data is loaded from
+on-disk caches (data_cache/ for real tickers, _shorthist_cache/ for the
+synthetic short-history ticker). No network fetch happens during capture.
+Re-running this script produces byte-identical JSONs. This is *why* captured
+baselines are a meaningful regression barrier for the Phase 3 refactor.
 
 Baseline fields captured (per the Phase 1 brief)
 ------------------------------------------------
@@ -40,23 +86,32 @@ Baseline fields captured (per the Phase 1 brief)
 
 Sanity asserts
 --------------
-For backtest_symbol and backtest_multi_strategy we ALSO call the real
-function in finance_model_v2 and assert the mirrored loop produces the
-same final portfolio value and number of buys. If either fires, the
-baseline is invalid and the script exits with code 2 so the commit can
-be aborted — do not treat a mirror-mismatch JSON as a baseline.
+Sanity cross-checks call the real finance_model_v2 function alongside the
+mirror and assert they produce the same final portfolio value / strategy
+return / buy count. A mismatch is fatal (script exits with code 2 so the
+baseline commit is aborted — a sanity-failing JSON is worse than no JSON).
 
-For predict_ticker_inline we call predict_ticker() and assert its
-reported backtest.strategy_return matches our mirror's derived return.
+By default, sanity runs for ONE ticker (KO) across ALL FOUR capture paths
+(predict_inline, backtest_symbol, multi_strategy full, multi_strategy
+buy_only). This is intentional: the four capture_* functions below are
+line-for-line copies of the target loops, so structural equivalence on one
+deterministic ticker implies structural equivalence on all — and the real
+functions are expensive (build_stacking_ensemble is ~18 model fits per
+retrain × ~44 retrains). Running full sanity across 7 tickers × 4 paths
+would roughly triple wall-clock time for no additional signal.
+
+Set QF_BASELINE_FULL_SANITY=1 to force sanity on every (ticker, path)
+combination when paranoia is warranted (e.g. before a risky refactor lands).
 
 Usage
 -----
     python tests/backtest_baselines/capture_baselines.py
 
-Writes:
+Writes (per ticker):
     tests/backtest_baselines/<TICKER>_predict_inline.json
     tests/backtest_baselines/<TICKER>_backtest_symbol.json
     tests/backtest_baselines/<TICKER>_multi_strategy.json
+    tests/backtest_baselines/<TICKER>_multi_strategy_buyonly.json
 """
 from __future__ import annotations
 
@@ -108,14 +163,107 @@ from finance_model_v2 import (  # noqa: E402
 import pandas as pd  # noqa: E402  (imported after fm so finance_model_v2's warnings filter wins)
 
 
-TARGET_TICKERS = ["SPY", "MSFT", "JNJ", "KO", "AAPL"]
+# Real tickers: full data_cache/<SYM>.csv history (back to 2010-01-04).
+REAL_TICKERS = ["SPY", "MSFT", "JNJ", "KO", "AAPL", "NVDA"]
+
+# Synthetic short-history ticker — see module docstring. Built at capture
+# time from the tail of data_cache/AAPL.csv and written to a sibling cache
+# directory. The "SHORTHIST_" prefix is deliberate: any human reading the
+# baseline JSON should immediately recognise this is not a real-world result.
+SHORTHIST_SYMBOL = "SHORTHIST_AAPL"
+SHORTHIST_SOURCE = "AAPL"
+SHORTHIST_YEARS = 3  # tail slice length, in trading years
+
+# Canonical capture order (used for logging/reporting).
+TARGET_TICKERS = REAL_TICKERS + [SHORTHIST_SYMBOL]
+
 # Use full-signal strategy for all tickers so the three paths are directly
 # comparable on identical inputs. Forcing 'full' here does NOT affect the
 # underlying models — it only changes which branch of the per-step signal
 # logic runs. This is the whole point: if the three paths disagree on the
-# same inputs, we want to see it.
+# same inputs, we want to see it. (The multi_strategy buy_only sub-portfolio
+# is captured separately and is independent of this STRATEGY flag — it
+# always captures the buy_only curve from the same model run.)
 STRATEGY = "full"
 OUT_DIR = os.path.abspath(os.path.dirname(__file__))
+
+# Cache dir for synthetic tickers (see _materialize_shorthist_csv). Kept
+# distinct from data_cache/ so we never mutate the real cache.
+SHORTHIST_CACHE_DIR = os.path.join(OUT_DIR, "_shorthist_cache")
+REAL_CACHE_DIR = os.path.join(REPO_ROOT, "data_cache")
+
+
+def _cache_dir_for(symbol: str) -> str:
+    """Return the cache_dir to pass to fetch_stock_data / predict_ticker /
+    backtest_symbol / backtest_multi_strategy for this symbol. Real tickers
+    live in data_cache/; synthetic tickers live in _shorthist_cache/."""
+    if symbol == SHORTHIST_SYMBOL:
+        return SHORTHIST_CACHE_DIR
+    return REAL_CACHE_DIR
+
+
+def _materialize_shorthist_csv() -> str:
+    """Build the synthetic SHORTHIST_AAPL cache CSV from the tail of the real
+    AAPL cache. Idempotent: re-running is byte-identical as long as the source
+    AAPL.csv is unchanged. Returns the absolute path to the generated CSV."""
+    os.makedirs(SHORTHIST_CACHE_DIR, exist_ok=True)
+    src = os.path.join(REAL_CACHE_DIR, f"{SHORTHIST_SOURCE}.csv")
+    dst = os.path.join(SHORTHIST_CACHE_DIR, f"{SHORTHIST_SYMBOL}.csv")
+    df = pd.read_csv(src, index_col=0, parse_dates=True)
+    # ~252 trading days/year. Slice the tail and re-emit so fetch_stock_data's
+    # freshness check passes (last row date is today's completed session, same
+    # as the source).
+    tail = df.iloc[-(SHORTHIST_YEARS * 252):].copy()
+    tail.index.name = df.index.name or "Date"
+    tail.to_csv(dst)
+    return dst
+
+
+# -----------------------------------------------------------------------------
+# Guard-firing hook for SHORTHIST_AAPL.
+# -----------------------------------------------------------------------------
+
+# Lower value of fm.MIN_TRAIN_DAYS to apply during SHORTHIST capture. See the
+# module docstring for the arithmetic: bsi=80 → vs=68 → seed=12 → guard fires
+# for 7 iterations before the rolling history reaches MIN_ZSCORE_SAMPLES=20.
+SHORTHIST_PATCH_MIN_TRAIN_DAYS = 80
+
+
+class _patched_min_train_days:
+    """Context manager that temporarily lowers fm.MIN_TRAIN_DAYS so the
+    MIN_ZSCORE_SAMPLES guard actually fires inside the backtest loops. Both
+    the real finance_model_v2 functions (used for sanity) AND our mirror
+    loops (which read fm.MIN_TRAIN_DAYS dynamically — see _live_constants)
+    respect the patched value. Outside this context manager, the constant
+    is restored to its original production value."""
+
+    def __init__(self, value: int, enabled: bool = True):
+        self.value = value
+        self.enabled = enabled
+        self._prev: int | None = None
+
+    def __enter__(self) -> "_patched_min_train_days":
+        if self.enabled:
+            self._prev = fm.MIN_TRAIN_DAYS
+            fm.MIN_TRAIN_DAYS = self.value
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self.enabled and self._prev is not None:
+            fm.MIN_TRAIN_DAYS = self._prev
+
+
+def _live_constants() -> tuple[int, int, int]:
+    """Return the LIVE values of (MIN_TRAIN_DAYS, MIN_BACKTEST_DAYS,
+    MIN_ZSCORE_SAMPLES) by reading them off the fm module, so a patch via
+    _patched_min_train_days() is respected by the mirror loops. We keep
+    RETRAIN_FREQ_V2/V3 / ZSCORE_LOOKBACK / THRESHOLD on the frozen imports
+    above — they are not patched."""
+    return (
+        int(fm.MIN_TRAIN_DAYS),
+        int(fm.MIN_BACKTEST_DAYS),
+        int(fm.MIN_ZSCORE_SAMPLES),
+    )
 
 # Sanity-check ticker: on this one ticker we ALSO call the real function in
 # finance_model_v2 and compare. The three capture_* functions here are line-
@@ -131,7 +279,10 @@ FULL_SANITY = os.environ.get("QF_BASELINE_FULL_SANITY", "0") == "1"
 
 
 def _should_sanity(symbol: str) -> bool:
-    return FULL_SANITY or symbol == SANITY_TICKER
+    # Always sanity-check SHORTHIST_AAPL — its baseline depends on the
+    # _patched_min_train_days monkey-patch so we want fresh cross-verification
+    # against the real (also patched) fm functions on every capture run.
+    return FULL_SANITY or symbol == SANITY_TICKER or symbol == SHORTHIST_SYMBOL
 
 
 # -----------------------------------------------------------------------------
@@ -197,7 +348,8 @@ def capture_predict_inline(symbol: str, version: str) -> dict:
     """Mirror the inline loop inside predict_ticker(...). Deterministic under
     random_state=42. We also call predict_ticker() itself and sanity-check
     that the published backtest.strategy_return matches ours."""
-    raw = fetch_stock_data([symbol])
+    cache_dir = _cache_dir_for(symbol)
+    raw = fetch_stock_data([symbol], cache_dir=cache_dir)
     if symbol not in raw or raw[symbol].empty:
         return {"error": f"No data for {symbol}"}
     df = raw[symbol].copy()
@@ -291,7 +443,7 @@ def capture_predict_inline(symbol: str, version: str) -> dict:
     our_strategy_return = (port[-1] / 10000.0 - 1.0) * 100.0 if port.size else 0.0
     if _should_sanity(symbol):
         # Sanity: call the real predict_ticker and cross-check strategy_return.
-        real = predict_ticker(symbol, verbose=False, version=version, strategy=STRATEGY)
+        real = predict_ticker(symbol, cache_dir=cache_dir, verbose=False, version=version, strategy=STRATEGY)
         if "error" in real:
             real_strategy_return = None
         else:
@@ -320,6 +472,9 @@ def capture_predict_inline(symbol: str, version: str) -> dict:
         "min_zscore_samples_guard": False,  # <-- C-3: predict_ticker omits this guard
         "retrain_freq_days": None,  # <-- one-shot; no walk-forward
         "seed_n": seed_n,
+        "min_train_days_used": int(fm.MIN_TRAIN_DAYS),
+        "min_zscore_samples_used": int(fm.MIN_ZSCORE_SAMPLES),
+        "shorthist_patch_active": symbol == SHORTHIST_SYMBOL,
         "sanity": {
             "real_predict_ticker_strategy_return_pct": real_strategy_return,
             "mirror_strategy_return_pct": round(our_strategy_return, 4),
@@ -335,7 +490,9 @@ def capture_predict_inline(symbol: str, version: str) -> dict:
 # -----------------------------------------------------------------------------
 
 def capture_backtest_symbol(symbol: str, version: str) -> dict:
-    raw = fetch_stock_data([symbol])
+    cache_dir = _cache_dir_for(symbol)
+    min_train_days, min_backtest_days, min_zscore_samples = _live_constants()
+    raw = fetch_stock_data([symbol], cache_dir=cache_dir)
     if symbol not in raw or raw[symbol].empty:
         return {"error": f"No data for {symbol}"}
     df = raw[symbol].copy()
@@ -351,8 +508,8 @@ def capture_backtest_symbol(symbol: str, version: str) -> dict:
     dc = df.dropna(subset=["Target_Return"] + fc).copy()
     bm = dc.index >= pd.Timestamp(BACKTEST_PREFERRED_START)
     bsi = int(np.argmax(bm)) if bm.any() else 0
-    bsi = max(bsi, MIN_TRAIN_DAYS)
-    if bsi >= len(dc) - MIN_BACKTEST_DAYS:
+    bsi = max(bsi, min_train_days)
+    if bsi >= len(dc) - min_backtest_days:
         return {"error": f"Not enough data ({len(dc)} rows)"}
 
     aX = dc[fc].values
@@ -393,7 +550,7 @@ def capture_backtest_symbol(symbol: str, version: str) -> dict:
         if len(pred_history) > ZSCORE_LOOKBACK:
             pred_history = pred_history[-ZSCORE_LOOKBACK:]
 
-        if len(pred_history) >= MIN_ZSCORE_SAMPLES:
+        if len(pred_history) >= min_zscore_samples:
             hist = np.array(pred_history[:-1])
             mu, sigma = float(np.mean(hist)), float(np.std(hist))
             z = (raw_pred - mu) / sigma if sigma > 1e-10 else 0.0
@@ -436,7 +593,7 @@ def capture_backtest_symbol(symbol: str, version: str) -> dict:
     if _should_sanity(symbol):
         # Sanity: call the real backtest_symbol and cross-check the final
         # portfolio value and total trade count it prints.
-        real_port = backtest_symbol(symbol, version=version, strategy=STRATEGY)
+        real_port = backtest_symbol(symbol, cache_dir=cache_dir, version=version, strategy=STRATEGY)
         sanity = {
             "real_final_port": float(round(real_port[-1], 4)) if real_port is not None else None,
             "mirror_final_port": float(round(port_arr[-1], 4)) if port_arr.size else None,
@@ -469,17 +626,31 @@ def capture_backtest_symbol(symbol: str, version: str) -> dict:
         "buys": sigs.count("BUY"),
         "sells": sigs.count("SELL"),
         "holds": sigs.count("HOLD"),
+        "min_train_days_used": int(fm.MIN_TRAIN_DAYS),
+        "min_zscore_samples_used": int(fm.MIN_ZSCORE_SAMPLES),
+        "shorthist_patch_active": symbol == SHORTHIST_SYMBOL,
         "sanity": sanity,
     }
     return _summary(port_arr, trades, extra)
 
 
 # -----------------------------------------------------------------------------
-# Path 3 — backtest_multi_strategy (finance_model_v2.py:854-902), full sub-portfolio
+# Path 3 — backtest_multi_strategy (finance_model_v2.py:854-902).
+#
+# Single walk-forward loop trains the model once per retrain window and applies
+# BOTH the Full Signal and Buy-Only strategies on the same raw predictions.
+# We return a dict with two summaries ('full' and 'buy_only'); the driver
+# writes them as sibling JSONs (<SYM>_multi_strategy.json and
+# <SYM>_multi_strategy_buyonly.json). Rationale: Strategy Lab renders both
+# curves and the post-refactor engine must reproduce both — capturing only
+# 'full' (Phase 1's original behaviour) leaves buy_only unprotected against
+# regression.
 # -----------------------------------------------------------------------------
 
 def capture_multi_strategy(symbol: str, version: str) -> dict:
-    raw = fetch_stock_data([symbol])
+    cache_dir = _cache_dir_for(symbol)
+    min_train_days, min_backtest_days, min_zscore_samples = _live_constants()
+    raw = fetch_stock_data([symbol], cache_dir=cache_dir)
     if symbol not in raw or raw[symbol].empty:
         return {"error": f"No data for {symbol}"}
     df = raw[symbol].copy()
@@ -495,19 +666,24 @@ def capture_multi_strategy(symbol: str, version: str) -> dict:
     dc = df.dropna(subset=["Target_Return"] + fc).copy()
     bm = dc.index >= pd.Timestamp(BACKTEST_PREFERRED_START)
     bsi = int(np.argmax(bm)) if bm.any() else 0
-    bsi = max(bsi, MIN_TRAIN_DAYS)
-    if bsi >= len(dc) - MIN_BACKTEST_DAYS:
+    bsi = max(bsi, min_train_days)
+    if bsi >= len(dc) - min_backtest_days:
         return {"error": f"Not enough data ({len(dc)} rows)"}
 
     aX = dc[fc].values
     ay = dc["Target_Return"].values
     ap = dc["Close"].values.ravel()
 
-    f_cash, f_sh = 10000.0, 0.0
+    # Two parallel portfolios — mirror of finance_model_v2.py:843-902.
+    f_cash, f_sh = 10000.0, 0.0  # full signal
+    b_cash, b_sh = 10000.0, 0.0  # buy only
     f_port: list[float] = []
+    b_port: list[float] = []
     dates_out: list[str] = []
     f_sigs: list[str] = []
+    b_sigs: list[str] = []
     f_trades: list[dict] = []
+    b_trades: list[dict] = []
     mdl = None
     sc = StandardScaler()
     rc = 0
@@ -538,7 +714,7 @@ def capture_multi_strategy(symbol: str, version: str) -> dict:
         if len(pred_history) > ZSCORE_LOOKBACK:
             pred_history = pred_history[-ZSCORE_LOOKBACK:]
 
-        if len(pred_history) >= MIN_ZSCORE_SAMPLES:
+        if len(pred_history) >= min_zscore_samples:
             hist = np.array(pred_history[:-1])
             mu, sigma = float(np.mean(hist)), float(np.std(hist))
             z = (raw_pred - mu) / sigma if sigma > 1e-10 else 0.0
@@ -547,81 +723,140 @@ def capture_multi_strategy(symbol: str, version: str) -> dict:
 
         pr = float(ap[i])
         date_str = str(dc.index[i].date())
-        # Full-signal branch only (mirror of lines 888-895):
-        signal = "HOLD"
+
+        # Full-signal branch (mirror of lines 888-895).
+        f_sig = "HOLD"
         if z >= THRESHOLD and f_cash > 0:
             f_sh = f_cash / pr
             f_cash = 0
-            signal = "BUY"
+            f_sig = "BUY"
         elif z <= -THRESHOLD and f_sh > 0:
             f_cash = f_sh * pr
             f_sh = 0
-            signal = "SELL"
-        f_sigs.append(signal)
-        pv = f_cash + f_sh * pr
-        f_port.append(pv)
-        dates_out.append(date_str)
-        if signal in ("BUY", "SELL"):
+            f_sig = "SELL"
+        f_sigs.append(f_sig)
+        f_pv = f_cash + f_sh * pr
+        f_port.append(f_pv)
+        if f_sig in ("BUY", "SELL"):
             f_trades.append({
                 "date": date_str,
-                "signal": signal,
+                "signal": f_sig,
                 "price": round(pr, 4),
                 "z_score": round(z, 4),
-                "portfolio_value": round(pv, 4),
+                "portfolio_value": round(f_pv, 4),
             })
+
+        # Buy-only branch (mirror of lines 897-902).
+        b_sig = "HOLD"
+        if z >= THRESHOLD and b_cash > 0:
+            b_sh = b_cash / pr
+            b_cash = 0
+            b_sig = "BUY"
+        b_sigs.append(b_sig)
+        b_pv = b_cash + b_sh * pr
+        b_port.append(b_pv)
+        if b_sig == "BUY":
+            b_trades.append({
+                "date": date_str,
+                "signal": b_sig,
+                "price": round(pr, 4),
+                "z_score": round(z, 4),
+                "portfolio_value": round(b_pv, 4),
+            })
+
+        dates_out.append(date_str)
         rc += 1
 
-    port_arr = np.array(f_port, dtype=float)
+    f_port_arr = np.array(f_port, dtype=float)
+    b_port_arr = np.array(b_port, dtype=float)
 
+    # Sanity cross-check against the real backtest_multi_strategy — covers
+    # BOTH sub-portfolios in a single call.
     if _should_sanity(symbol):
-        # Sanity: call the real backtest_multi_strategy and cross-check full's
-        # final portfolio value + buy count.
-        real = backtest_multi_strategy(symbol, version=version)
-        if real is not None and "full" in real:
-            real_full_port_list = real["full"].get("portfolio") or []
-            real_full_port_last = float(real_full_port_list[-1]) if real_full_port_list else None
-            real_full_buys = int(real["full"].get("buys", -1))
+        real = backtest_multi_strategy(symbol, cache_dir=cache_dir, version=version)
+        if real is not None:
+            real_full_port = real.get("full", {}).get("portfolio") or []
+            real_buy_port = real.get("buy_only", {}).get("portfolio") or []
+            real_full_last = float(real_full_port[-1]) if real_full_port else None
+            real_buy_last = float(real_buy_port[-1]) if real_buy_port else None
+            real_full_buys = int(real.get("full", {}).get("buys", -1))
+            real_buy_buys = int(real.get("buy_only", {}).get("buys", -1))
         else:
-            real_full_port_last = None
-            real_full_buys = None
-        sanity = {
-            "real_full_final_port": real_full_port_last,
-            "mirror_full_final_port": float(round(port_arr[-1], 4)) if port_arr.size else None,
-            "real_full_buys": real_full_buys,
-            "mirror_full_buys": f_sigs.count("BUY"),
+            real_full_last = real_buy_last = None
+            real_full_buys = real_buy_buys = None
+        full_sanity = {
+            "real_final_port": real_full_last,
+            "mirror_final_port": float(round(f_port_arr[-1], 4)) if f_port_arr.size else None,
+            "real_buys": real_full_buys,
+            "mirror_buys": f_sigs.count("BUY"),
             "matches_real": (
-                real_full_port_last is not None
-                and port_arr.size
+                real_full_last is not None
+                and f_port_arr.size
                 # multi_strategy rounds portfolio to 2 decimals — accept 1-cent drift.
-                and abs(real_full_port_last - float(port_arr[-1])) < 0.02
+                and abs(real_full_last - float(f_port_arr[-1])) < 0.02
                 and real_full_buys == f_sigs.count("BUY")
             ),
             "ran": True,
         }
+        buy_sanity = {
+            "real_final_port": real_buy_last,
+            "mirror_final_port": float(round(b_port_arr[-1], 4)) if b_port_arr.size else None,
+            "real_buys": real_buy_buys,
+            "mirror_buys": b_sigs.count("BUY"),
+            "matches_real": (
+                real_buy_last is not None
+                and b_port_arr.size
+                and abs(real_buy_last - float(b_port_arr[-1])) < 0.02
+                and real_buy_buys == b_sigs.count("BUY")
+            ),
+            "ran": True,
+        }
     else:
-        sanity = {"ran": False, "matches_real": None}
+        full_sanity = {"ran": False, "matches_real": None}
+        buy_sanity = {"ran": False, "matches_real": None}
 
-    extra = {
+    common_extra = {
         "path": "backtest_multi_strategy",
         "source_lines": "finance_model_v2.py:854-902",
-        "sub_portfolio": "full",  # buy_only is the same engine, captured post-refactor
         "symbol": symbol,
         "strategy": STRATEGY,
         "version": version,
         "initial_cash": 10000.0,
-        "period_days": len(port_arr),
+        "period_days": len(f_port_arr),
         "start_date": dates_out[0] if dates_out else None,
         "end_date": dates_out[-1] if dates_out else None,
         "dates": dates_out,
         "ensemble_builder": "build_stacking_ensemble_fast" if version == "v3" else "train_rf_v2+train_xgb_v2",
         "min_zscore_samples_guard": True,
         "retrain_freq_days": int(rf_freq),
+        "min_train_days_used": int(fm.MIN_TRAIN_DAYS),
+        "min_zscore_samples_used": int(fm.MIN_ZSCORE_SAMPLES),
+        "shorthist_patch_active": symbol == SHORTHIST_SYMBOL,
+    }
+
+    full_extra = {
+        **common_extra,
+        "sub_portfolio": "full",
         "buys": f_sigs.count("BUY"),
         "sells": f_sigs.count("SELL"),
         "holds": f_sigs.count("HOLD"),
-        "sanity": sanity,
+        "sanity": full_sanity,
     }
-    return _summary(port_arr, f_trades, extra)
+    buy_extra = {
+        **common_extra,
+        "sub_portfolio": "buy_only",
+        "buys": b_sigs.count("BUY"),
+        "sells": 0,
+        "holds": b_sigs.count("HOLD"),
+        "sanity": buy_sanity,
+    }
+
+    # Return BOTH summaries; driver splits them into two JSONs.
+    return {
+        "__multi__": True,
+        "full": _summary(f_port_arr, f_trades, full_extra),
+        "buy_only": _summary(b_port_arr, b_trades, buy_extra),
+    }
 
 
 # -----------------------------------------------------------------------------
@@ -631,13 +866,36 @@ def capture_multi_strategy(symbol: str, version: str) -> dict:
 PATHS = [
     ("predict_inline", capture_predict_inline),
     ("backtest_symbol", capture_backtest_symbol),
-    ("multi_strategy", capture_multi_strategy),
+    ("multi_strategy", capture_multi_strategy),   # splits into _multi_strategy + _multi_strategy_buyonly
 ]
 
 
 def _write_json(path: str, payload: dict) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, default=str)
+
+
+def _log_result(tag: str, payload: dict) -> tuple[str | None, str | None]:
+    """Emit the one-line OK/OK+SANITY/SANITY-FAIL status for a single JSON
+    payload. Returns (error_msg, sanity_failure_msg), either of which may be
+    None."""
+    if "error" in payload:
+        err = f"{tag}: {payload['error']}"
+        print(f"[baselines][SKIP] {err}")
+        return err, None
+    san = payload.get("sanity", {}) or {}
+    final_pv = payload.get("final_portfolio_value")
+    n_trades = payload.get("num_trades")
+    sharpe = payload.get("sharpe")
+    if san.get("ran") and san.get("matches_real") is False:
+        msg = f"{tag}: sanity mismatch -> {san}"
+        print(f"[baselines][SANITY-FAIL] {msg}")
+        return None, msg
+    if san.get("ran"):
+        print(f"[baselines][OK+SANITY] {tag}: final=${final_pv}  trades={n_trades}  sharpe={sharpe}")
+    else:
+        print(f"[baselines][OK] {tag}: final=${final_pv}  trades={n_trades}  sharpe={sharpe}  (sanity skipped)")
+    return None, None
 
 
 def main() -> int:
@@ -649,42 +907,58 @@ def main() -> int:
     print(f"[baselines] tickers={TARGET_TICKERS}")
     print(f"[baselines] OUT_DIR={OUT_DIR}")
 
+    # Materialise the synthetic short-history ticker into its private cache.
+    shorthist_path = _materialize_shorthist_csv()
+    print(f"[baselines] shorthist cache -> {shorthist_path}")
+    print(f"[baselines] shorthist MIN_TRAIN_DAYS patch -> {SHORTHIST_PATCH_MIN_TRAIN_DAYS} (default {fm.MIN_TRAIN_DAYS})")
+
     sanity_failures: list[str] = []
     errors: list[str] = []
 
     for sym in TARGET_TICKERS:
-        for label, fn in PATHS:
-            out_path = os.path.join(OUT_DIR, f"{sym}_{label}.json")
-            print(f"\n[baselines] === {sym} / {label} ===")
-            try:
-                result = fn(sym, version)
-            except Exception as exc:  # noqa: BLE001
-                err = f"{sym}/{label}: {exc.__class__.__name__}: {exc}"
-                print(f"[baselines][ERROR] {err}")
-                traceback.print_exc()
-                errors.append(err)
-                _write_json(out_path, {"error": err})
-                continue
+        # Apply the MIN_TRAIN_DAYS monkey-patch ONLY for the SHORTHIST ticker
+        # — real tickers capture under production constants. The patch is
+        # scoped to the whole 3-path inner loop so mirror + sanity call both
+        # see the same value.
+        patch_enabled = sym == SHORTHIST_SYMBOL
+        with _patched_min_train_days(SHORTHIST_PATCH_MIN_TRAIN_DAYS, enabled=patch_enabled):
+            for label, fn in PATHS:
+                print(f"\n[baselines] === {sym} / {label} ===")
+                try:
+                    result = fn(sym, version)
+                except Exception as exc:  # noqa: BLE001
+                    err = f"{sym}/{label}: {exc.__class__.__name__}: {exc}"
+                    print(f"[baselines][ERROR] {err}")
+                    traceback.print_exc()
+                    errors.append(err)
+                    _write_json(os.path.join(OUT_DIR, f"{sym}_{label}.json"), {"error": err})
+                    continue
 
-            if "error" in result:
-                print(f"[baselines][SKIP] {sym}/{label}: {result['error']}")
-                errors.append(f"{sym}/{label}: {result['error']}")
+                if result.get("__multi__"):
+                    # multi_strategy returns BOTH sub-portfolios in one call —
+                    # split into sibling JSONs so they can be diffed independently.
+                    full_path = os.path.join(OUT_DIR, f"{sym}_{label}.json")
+                    buy_path = os.path.join(OUT_DIR, f"{sym}_{label}_buyonly.json")
+                    _write_json(full_path, result["full"])
+                    _write_json(buy_path, result["buy_only"])
+                    for tag, payload in (
+                        (f"{sym}/{label}[full]", result["full"]),
+                        (f"{sym}/{label}[buy_only]", result["buy_only"]),
+                    ):
+                        e, s = _log_result(tag, payload)
+                        if e:
+                            errors.append(e)
+                        if s:
+                            sanity_failures.append(s)
+                    continue
+
+                out_path = os.path.join(OUT_DIR, f"{sym}_{label}.json")
                 _write_json(out_path, result)
-                continue
-
-            san = result.get("sanity", {}) or {}
-            final_pv = result.get("final_portfolio_value")
-            n_trades = result.get("num_trades")
-            sharpe = result.get("sharpe")
-            if san.get("ran") and san.get("matches_real") is False:
-                msg = f"{sym}/{label}: sanity mismatch -> {san}"
-                print(f"[baselines][SANITY-FAIL] {msg}")
-                sanity_failures.append(msg)
-            elif san.get("ran"):
-                print(f"[baselines][OK+SANITY] final=${final_pv}  trades={n_trades}  sharpe={sharpe}")
-            else:
-                print(f"[baselines][OK] final=${final_pv}  trades={n_trades}  sharpe={sharpe}  (sanity skipped)")
-            _write_json(out_path, result)
+                e, s = _log_result(f"{sym}/{label}", result)
+                if e:
+                    errors.append(e)
+                if s:
+                    sanity_failures.append(s)
 
     print("\n" + "=" * 60)
     print(f"[baselines] done. errors={len(errors)} sanity_failures={len(sanity_failures)}")

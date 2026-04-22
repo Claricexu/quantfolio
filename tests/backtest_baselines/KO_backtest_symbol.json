@@ -8655,6 +8655,9 @@
   "buys": 8,
   "sells": 8,
   "holds": 2823,
+  "min_train_days_used": 126,
+  "min_zscore_samples_used": 20,
+  "shorthist_patch_active": false,
   "sanity": {
     "real_final_port": 27444.6988,
     "mirror_final_port": 27444.6988,

@@ -1733,6 +1733,9 @@
   "min_zscore_samples_guard": false,
   "retrain_freq_days": null,
   "seed_n": 20,
+  "min_train_days_used": 126,
+  "min_zscore_samples_used": 20,
+  "shorthist_patch_active": false,
   "sanity": {
     "real_predict_ticker_strategy_return_pct": null,
     "mirror_strategy_return_pct": 42.9158,

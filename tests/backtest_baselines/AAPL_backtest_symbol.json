@@ -8739,6 +8739,9 @@
   "buys": 14,
   "sells": 14,
   "holds": 2811,
+  "min_train_days_used": 126,
+  "min_zscore_samples_used": 20,
+  "shorthist_patch_active": false,
   "sanity": {
     "ran": false,
     "matches_real": null
