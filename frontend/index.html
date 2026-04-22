@@ -1482,7 +1482,7 @@ function buildReportRow(r) {
     <td>${v2.signal ? signalHTML(v2.signal) : '\u2014'}</td>
     <td>${v3pct != null ? pctHTML(v3pct) : '\u2014'}</td>
     <td>${v3.signal ? signalHTML(v3.signal) : '\u2014'}</td>
-    <td>${signalHTML(r.consensus_signal)}</td>
+    <td>${signalHTML(r.consensus_signal)}${r._sell_downgraded ? `<span class="downgrade-info" title="${DOWNGRADE_TOOLTIP}" aria-label="${DOWNGRADE_TOOLTIP}" tabindex="0">i</span>` : ''}</td>
     <td><span class="conf-${r.confidence}" style="font-size:11px;font-weight:700;font-family:var(--mono)">${r.confidence}</span></td>
     <td style="font-size:10px;color:${bsColor};font-weight:600">${bsLabel}</td>
     <td class="mono" style="font-weight:700;color:${vColor}">${gfScore != null ? gfScore : '\u2014'}</td>
