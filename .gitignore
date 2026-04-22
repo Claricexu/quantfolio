@@ -45,3 +45,8 @@ Thumbs.db
 
 # Claude Code runtime state
 .claude/scheduled_tasks.lock
+
+# Server verification logs (ephemeral)
+diagnostics/server.log
+diagnostics/server.err.log
+diagnostics/*.log
