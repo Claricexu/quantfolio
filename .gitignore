@@ -1,5 +1,4 @@
 # Generated databases
-*.db
 fundamentals.db
 
 # Checkpoint files and caches
@@ -32,11 +31,10 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Local Claude permissions
 .claude/settings.local.json
 
 # Local secrets — never commit
 .env
 .env.local
 .env.*.local
-
-.claude/settings.local.json
