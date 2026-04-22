@@ -237,6 +237,10 @@
   .modal-overlay { position:fixed; inset:0; background:rgba(3,8,14,0.72);
     backdrop-filter:blur(2px); z-index:1000; display:flex; align-items:center;
     justify-content:center; padding:20px; animation:fadeUp 0.15s ease-out; }
+  /* [hidden] default (display:none) is overridden by the .modal-overlay rule
+     above — re-assert it with class+attribute specificity so the modal
+     stays hidden until openRebuildModal() removes the attribute. */
+  .modal-overlay[hidden] { display:none; }
   .modal-card { background:var(--bg-card); border:1px solid var(--border);
     border-radius:12px; padding:24px 26px; width:100%; max-width:520px;
     box-shadow:0 20px 60px rgba(0,0,0,0.6); color:var(--text-secondary);
@@ -2771,6 +2775,8 @@ function openRebuildModal() {
 
   tokenEl.value = '';
   errorEl.textContent = '';
+  // Start begins disabled on every open; token input enables it live.
+  startBtn.disabled = true;
   _rebuildModalPrevFocus = document.activeElement;
   modal.hidden = false;
   // Initial focus on the token input (H-12 spec).
@@ -2779,6 +2785,10 @@ function openRebuildModal() {
   // Wire handlers fresh each open so we don't stack listeners.
   cancel.onclick = closeRebuildModal;
   startBtn.onclick = onRebuildModalSubmit;
+  tokenEl.oninput = () => {
+    startBtn.disabled = (tokenEl.value.trim().toUpperCase() !== 'REBUILD');
+    if (errorEl.textContent) errorEl.textContent = '';
+  };
   tokenEl.onkeydown = (e) => {
     if (e.key === 'Enter') { e.preventDefault(); onRebuildModalSubmit(); }
   };
@@ -2789,7 +2799,10 @@ function openRebuildModal() {
   _rebuildModalKeyHandler = (e) => {
     if (e.key === 'Escape') { e.preventDefault(); closeRebuildModal(); return; }
     if (e.key === 'Tab') {
-      const focusables = [tokenEl, cancel, startBtn];
+      // Filter dynamically — Start is disabled until REBUILD is typed, and
+      // disabled buttons are not Tab-reachable. Trap must stay inside the
+      // currently-enabled set.
+      const focusables = [tokenEl, cancel, startBtn].filter(el => !el.disabled);
       const idx = focusables.indexOf(document.activeElement);
       if (e.shiftKey) {
         if (idx <= 0) { e.preventDefault(); focusables[focusables.length - 1].focus(); }
