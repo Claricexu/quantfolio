@@ -216,6 +216,71 @@
   .bt-chart-wrap { position: relative; height: 360px; margin-top: 16px; }
   .bt-legend-dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:8px; vertical-align:middle; }
 
+  /* H-11: skeleton empty state (used by Daily Report / Strategy Lab / Leader Detector).
+     Shared visual with .scan-banner but taller and with a subtle shimmer on the CTA row. */
+  .skeleton-empty { background:#0e1e2e; border:1px solid #1c3d4d; border-radius:10px;
+    padding:20px 22px; margin-bottom:16px; color:var(--text-muted); font-size:13px; line-height:1.55; }
+  .skeleton-empty .se-title { font-size:14px; font-weight:700; color:var(--text-primary);
+    letter-spacing:0.3px; margin-bottom:6px; }
+  .skeleton-empty .se-body  { color:var(--text-muted); margin-bottom:12px; }
+  .skeleton-empty .se-time  { font-family:var(--mono); color:var(--blue-light); font-weight:600; }
+  .skeleton-empty details   { margin-top:10px; border-top:1px dashed var(--border); padding-top:10px; }
+  .skeleton-empty details summary { cursor:pointer; font-size:11px; color:var(--text-faint);
+    letter-spacing:0.5px; text-transform:uppercase; font-weight:600; user-select:none;
+    padding:4px 0; }
+  .skeleton-empty details summary:hover { color:var(--blue-light); }
+  .skeleton-empty details pre { margin-top:8px; padding:10px 12px; background:var(--bg-cell);
+    border-radius:6px; font-size:11px; color:var(--text-secondary); white-space:pre-wrap;
+    overflow-x:auto; font-family:var(--mono); }
+
+  /* H-12: destructive-action modal for leader rebuild. */
+  .modal-overlay { position:fixed; inset:0; background:rgba(3,8,14,0.72);
+    backdrop-filter:blur(2px); z-index:1000; display:flex; align-items:center;
+    justify-content:center; padding:20px; animation:fadeUp 0.15s ease-out; }
+  .modal-card { background:var(--bg-card); border:1px solid var(--border);
+    border-radius:12px; padding:24px 26px; width:100%; max-width:520px;
+    box-shadow:0 20px 60px rgba(0,0,0,0.6); color:var(--text-secondary);
+    font-size:13px; line-height:1.55; }
+  .modal-card h3 { font-size:18px; font-weight:700; color:var(--text-primary);
+    margin-bottom:10px; letter-spacing:-0.2px; }
+  .modal-card .modal-est { background:var(--bg-cell); border:1px solid var(--border);
+    border-radius:8px; padding:10px 12px; margin:12px 0; font-size:12px;
+    color:var(--text-muted); font-family:var(--mono); }
+  .modal-card .modal-est strong { color:var(--text-primary); font-weight:700; }
+  .modal-card .modal-last { font-size:11px; color:var(--text-muted); margin:8px 0 14px;
+    letter-spacing:0.3px; }
+  .modal-card .modal-last.recent { color:var(--text-dim); }
+  .modal-card .modal-last.stale  { color:var(--yellow-text); }
+  .modal-card .modal-last.never  { color:var(--yellow-text); }
+  .modal-card .modal-token-chip { display:inline-block; padding:3px 10px; border-radius:4px;
+    background:var(--red-bg); color:var(--red-text); border:1px solid var(--red-border);
+    font-family:var(--mono); font-weight:700; font-size:13px; letter-spacing:2px; }
+  .modal-card input.modal-token-input { width:100%; padding:10px 14px; margin-top:6px;
+    background:var(--bg-cell); border:1px solid var(--border); border-radius:8px;
+    color:var(--text-primary); font-family:var(--mono); font-weight:700;
+    font-size:15px; letter-spacing:1.5px; text-transform:uppercase; }
+  .modal-card input.modal-token-input:focus { border-color:var(--red-border); outline:none; }
+  .modal-card .modal-error { color:var(--red-text); font-size:11px; margin-top:8px;
+    min-height:14px; font-weight:600; }
+  .modal-card .modal-footer { display:grid; grid-template-columns:1fr 1fr; gap:10px;
+    margin-top:20px; }
+  .modal-card .modal-btn { padding:11px 18px; border-radius:8px; border:1px solid var(--border);
+    font-size:13px; font-weight:700; font-family:var(--sans); letter-spacing:0.4px;
+    cursor:pointer; transition:all 0.15s; }
+  .modal-card .modal-btn.cancel { background:var(--bg-cell); color:var(--text-secondary); }
+  .modal-card .modal-btn.cancel:hover { border-color:var(--blue); color:var(--text-primary); }
+  .modal-card .modal-btn.destructive { background:var(--red-bg); color:var(--red-text);
+    border-color:var(--red-border); }
+  .modal-card .modal-btn.destructive:hover { background:#4c1823; color:#ff95a5; }
+
+  /* C-2: "i" info icon inline with downgraded HOLD pills. */
+  .downgrade-info { display:inline-block; margin-left:6px; width:14px; height:14px;
+    border-radius:50%; background:var(--bg-cell); color:var(--text-muted);
+    border:1px solid var(--border); font-size:10px; font-weight:700; font-family:var(--sans);
+    text-align:center; line-height:12px; cursor:help; vertical-align:middle;
+    letter-spacing:0; }
+  .downgrade-info:hover { color:var(--blue-light); border-color:var(--blue); }
+
   /* Batch progress bar */
   .progress-bar { width:100%; height:6px; background:var(--bg-base); border-radius:3px; overflow:hidden; }
   .progress-fill { height:100%; background:linear-gradient(90deg, var(--blue), var(--blue-light)); border-radius:3px; transition:width 0.5s ease; }
@@ -373,6 +438,33 @@
   </div>
 </div>
 
+<!-- H-12: Destructive-action confirmation modal for "Rebuild leader universe".
+     Replaces native window.confirm() which: (a) has no a11y hooks, (b) offers no
+     time estimate, (c) is a one-click confirm on a 3.5-hour destructive job.
+     Token input ('REBUILD', case-insensitive) is the explicit gate.
+     Focus trap cycles through: input -> Cancel -> Start rebuild -> input.
+     Esc / overlay-click / Cancel all close and restore focus to #btnRebuildLeaders. -->
+<div id="rebuildModal" class="modal-overlay" role="dialog" aria-modal="true"
+     aria-labelledby="rebuildModalTitle" aria-describedby="rebuildModalEstimate" hidden>
+  <div class="modal-card">
+    <h3 id="rebuildModalTitle">Rebuild leader universe?</h3>
+    <p style="margin:0 0 6px">This kicks off a background job: metadata gather &rarr; SEC fetch &rarr; screen &rarr; select. You can keep using the app while it runs.</p>
+    <div class="modal-est" id="rebuildModalEstimate">
+      <strong>Cold rebuild:</strong> ~3.5 hours &middot; <strong>Warm rerun:</strong> ~10 minutes
+    </div>
+    <div class="modal-last" id="rebuildModalLast">&mdash;</div>
+    <div style="margin-top:4px">Type the word below to confirm:</div>
+    <div style="margin:8px 0 4px"><span class="modal-token-chip">REBUILD</span></div>
+    <input id="rebuildToken" class="modal-token-input" type="text" autocomplete="off"
+           spellcheck="false" aria-label="Type REBUILD to confirm" placeholder="REBUILD" />
+    <div id="rebuildModalError" class="modal-error" aria-live="polite"></div>
+    <div class="modal-footer">
+      <button type="button" id="rebuildModalCancel" class="modal-btn cancel">Cancel</button>
+      <button type="button" id="rebuildModalStart" class="modal-btn destructive">Start rebuild</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // =================================================================
 //  CONFIG
@@ -382,6 +474,29 @@ const QUICK_SYMBOLS = [
   "SPY","QQQ","AAPL","MSFT","NVDA","TSLA","AMZN","META",
   "GOOGL","JPM","GLD","AMD","LLY","AVGO","XOM","UNH"
 ];
+
+// C-11 / H-11: single source of truth for human-facing time estimates.
+// Update ALL of these together when hardware baseline changes.
+// Keep in sync with: api_server.py:~587 ("Dual-model report started. This
+// may take {DAILY_REPORT_EST}"), USER_GUIDE.md Parts 4 and 11. Measured
+// ~38 min on dev laptop — band widened asymmetrically (~30% below, ~50%
+// above) to account for other hardware and cold caches. [C-11]
+const DAILY_REPORT_EST = '25–55 min';
+// Strategy Lab universe — read from get_all_symbols() at backend startup.
+// Current = len(Tickers.csv + leaders.csv dedup) = 174 [verified 2026-04-21].
+const STRATEGY_LAB_TICKER_COUNT = 174;
+// Leader Detector universe — row count of universe_prescreened.csv.
+// Current = 1414 [verified 2026-04-21].
+const LEADER_UNIVERSE_SIZE = 1414;
+// C-2: strategy keys that actually USE SELL signals. Mirrors
+// api_server.py::_send_signal_alerts _full_keys — if the dashboard shows
+// a SELL for a stock whose best strategy is NOT one of these, the email
+// path suppresses it. See downgradeSells().
+const FULL_SIGNAL_STRATEGY_KEYS = new Set(['lite_full', 'pro_full']);
+// C-2 copy — exact string approved by reviewers; keep the "i" tooltip + pill.
+const DOWNGRADE_TOOLTIP =
+  "This stock's best-performing strategy never sells — holding through "
+  + "downturns beat timing exits in backtests. SELL signal hidden.";
 
 // Init
 document.getElementById('dateStr').textContent = new Date()
@@ -1106,7 +1221,21 @@ async function loadReport() {
       renderReport(json);
       reportLoaded = true;
     } else {
-      el.innerHTML = `<div class="scan-banner">No report data yet. Click "Generate Report" to run the first Lite + Pro scan (takes 40\u201390 min).</div>`;
+      // H-11: honest-timing skeleton empty state; role=status for screen readers.
+      el.innerHTML = `
+        <div class="skeleton-empty" role="status" aria-live="polite"
+             aria-label="No Daily Report yet, first scan takes about ${DAILY_REPORT_EST}">
+          <div class="se-title">No report yet</div>
+          <div class="se-body">
+            The first full Lite + Pro scan takes about
+            <span class="se-time">${DAILY_REPORT_EST}</span>
+            on a typical laptop &mdash; enough time to make coffee. You can close
+            this tab and come back; results save automatically.
+          </div>
+        </div>`;
+      // H-11: button label differs for empty vs loaded state.
+      const btnRefresh = document.getElementById('btnRefreshReport');
+      if (btnRefresh) btnRefresh.textContent = 'Generate First Report';
     }
   } catch (e) {
     clearInterval(tick);
@@ -1117,7 +1246,7 @@ async function loadReport() {
 async function refreshReport() {
   const statusEl = document.getElementById('reportStatus');
   statusEl.innerHTML = `<div class="scan-banner"><div class="spinner"></div>
-    Scan started \u2014 running Lite + Pro on all symbols. This may take 40\u201390 minutes. Results auto-update.</div>`;
+    Scan started — running Lite + Pro on all symbols. This may take ${DAILY_REPORT_EST}. Results auto-update.</div>`;
   reportLoaded = false;
   try {
     await fetchTimeout(`${API_BASE}/api/report?refresh=true`);
@@ -1172,24 +1301,79 @@ function pollReport(statusEl) {
   }, 5000);
 }
 
+// ─── C-2: dashboard / email SELL-filter parity ───────────────────────────
+// The email path (_send_signal_alerts in api_server.py) only emails a SELL
+// when the ticker's best backtested strategy is 'lite_full' or 'pro_full'
+// (i.e. actually uses SELL signals). Buy-only / Buy & Hold "bests" mean a
+// SELL would have historically hurt returns, so acting on it is noise.
+//
+// We apply that SAME filter here client-side. Rows that would be SELL get
+// downgraded to HOLD in a copy (we never mutate the server response) and
+// flagged with `_sell_downgraded = true` so buildReportRow can render a
+// small "(i)" info pill with DOWNGRADE_TOOLTIP next to the HOLD.
+//
+// IMPORTANT: this happens BEFORE the summary-card counts are computed —
+// that's why summary.consensus_sell / consensus_hold are RECOMPUTED below
+// from the processed array instead of being read verbatim from the
+// server's summary object. If a future reader "fixes" the card totals
+// back to the server counts, the cards will disagree with the visible
+// tables (e.g. "3 Consensus SELL" with zero SELL rows). Don't do that.
+function downgradeSells(rows, bestMap) {
+  if (!Array.isArray(rows)) return { processed: [], downgraded: 0 };
+  let downgraded = 0;
+  const processed = rows.map(r => {
+    if (r && r.consensus_signal === 'SELL') {
+      const bs = bestMap && bestMap[r.symbol];
+      const key = bs && bs.key;
+      if (!FULL_SIGNAL_STRATEGY_KEYS.has(key)) {
+        downgraded++;
+        return Object.assign({}, r, {
+          consensus_signal: 'HOLD',
+          _sell_downgraded: true,
+          _original_signal: 'SELL',
+        });
+      }
+    }
+    return r;
+  });
+  return { processed, downgraded };
+}
+
 function renderReport(json) {
   const report = json.data;
   if (!report || !report.data) return;
   const summary = report.summary || {};
-  const data = report.data || [];
+  const rawData = report.data || [];
   const el = document.getElementById('reportContent');
   const statusEl = document.getElementById('reportStatus');
 
-  // Status bar
-  if (json.generated_at) {
-    const dt = new Date(json.generated_at);
-    const timeStr = dt.toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
-    statusEl.innerHTML = `<div class="scan-banner" style="border-color:var(--green-border)">
-      Report generated: ${timeStr} | ${summary.total_symbols || data.length} symbols analyzed</div>`;
-  }
+  // C-2: downgrade SELL rows whose best strategy is NOT Full Signal before
+  // any rendering. `data` from here on is the post-filter view that users see.
+  const dg = downgradeSells(rawData, _bestStratMap);
+  const data = dg.processed;
+  // Wright's QA hook: surface the downgrade count in devtools.
+  console.debug('[C-2] ' + dg.downgraded + ' SELL row(s) downgraded to HOLD (best strategy != lite_full/pro_full)');
 
-  // Summary cards
-  const sentClass = `sentiment-${summary.market_sentiment || 'MIXED'}`;
+  // Status bar — C-12 resilience: guard against unparseable timestamps so
+  // the banner never shows "Invalid Date"; give the user an actionable
+  // Refresh button instead.
+  renderReportStatusBanner(statusEl, json.generated_at, summary, data);
+
+  // Summary cards — C-2: recompute counts from the POST-downgrade array so
+  // card totals always equal what is visible in the tables below. See the
+  // long-form comment above `downgradeSells` for why we intentionally do
+  // NOT trust summary.consensus_sell / consensus_hold here.
+  const recomputedBuy  = data.filter(r => r.consensus_signal === 'BUY').length;
+  const recomputedSell = data.filter(r => r.consensus_signal === 'SELL').length;
+  const recomputedHold = data.filter(r => r.consensus_signal === 'HOLD').length;
+  // HIGH-confidence count also shrinks: a downgraded row's model-agreement
+  // confidence was HIGH but the actionable bucket no longer applies, so we
+  // only count rows still rendered as HIGH.
+  const recomputedHighConf = data.filter(r =>
+    r.confidence === 'HIGH' && !r._sell_downgraded
+  ).length;
+
+  const sentClass = 'sentiment-' + (summary.market_sentiment || 'MIXED');
   const summaryHTML = `
     <div style="text-align:center;margin-bottom:20px">
       <div style="font-size:11px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Market Sentiment</div>
@@ -1197,19 +1381,19 @@ function renderReport(json) {
     </div>
     <div class="summary-grid">
       <div class="summary-card">
-        <div class="sc-value" style="color:var(--green-text)">${summary.consensus_buy || 0}</div>
+        <div class="sc-value" style="color:var(--green-text)">${recomputedBuy}</div>
         <div class="sc-label">Consensus BUY</div>
       </div>
       <div class="summary-card">
-        <div class="sc-value" style="color:var(--red-text)">${summary.consensus_sell || 0}</div>
+        <div class="sc-value" style="color:var(--red-text)">${recomputedSell}</div>
         <div class="sc-label">Consensus SELL</div>
       </div>
       <div class="summary-card">
-        <div class="sc-value" style="color:var(--yellow-text)">${summary.consensus_hold || 0}</div>
+        <div class="sc-value" style="color:var(--yellow-text)">${recomputedHold}</div>
         <div class="sc-label">Consensus HOLD</div>
       </div>
       <div class="summary-card">
-        <div class="sc-value" style="color:var(--green-text)">${summary.high_confidence || 0}</div>
+        <div class="sc-value" style="color:var(--green-text)">${recomputedHighConf}</div>
         <div class="sc-label">High Confidence</div>
       </div>
       <div class="summary-card">
@@ -1217,23 +1401,25 @@ function renderReport(json) {
         <div class="sc-label">Model Conflict</div>
       </div>
       <div class="summary-card">
-        <div class="sc-value" style="color:var(--text-secondary)">${summary.total_symbols || 0}</div>
+        <div class="sc-value" style="color:var(--text-secondary)">${data.length}</div>
         <div class="sc-label">Total Symbols</div>
       </div>
     </div>`;
 
-  // High confidence actions first
-  const highConf = data.filter(r => r.confidence === 'HIGH');
+  // C-2: a downgraded row is no longer actionable, so it must NOT appear in
+  // the High-Confidence SELL list even though the underlying model confidence
+  // was HIGH. Filter _sell_downgraded out before partitioning.
+  const highConf = data.filter(r => r.confidence === 'HIGH' && !r._sell_downgraded);
   const buys = highConf.filter(r => r.consensus_signal === 'BUY').sort((a,b) => (b.avg_pct_change||0) - (a.avg_pct_change||0));
   const sells = highConf.filter(r => r.consensus_signal === 'SELL').sort((a,b) => (a.avg_pct_change||0) - (b.avg_pct_change||0));
 
   let highConfHTML = '';
   if (buys.length > 0) {
-    highConfHTML += `<div class="section-label" style="margin-top:8px"><span style="color:var(--green-text);font-size:16px">\u25B2</span> High-Confidence BUY (Both Models Agree)</div>`;
+    highConfHTML += `<div class="section-label" style="margin-top:8px"><span style="color:var(--green-text);font-size:16px">▲</span> High-Confidence BUY (Both Models Agree)</div>`;
     highConfHTML += buildReportTable(buys);
   }
   if (sells.length > 0) {
-    highConfHTML += `<div class="section-label"><span style="color:var(--red-text);font-size:16px">\u25BC</span> High-Confidence SELL (Both Models Agree)</div>`;
+    highConfHTML += `<div class="section-label"><span style="color:var(--red-text);font-size:16px">▼</span> High-Confidence SELL (Both Models Agree)</div>`;
     highConfHTML += buildReportTable(sells);
   }
   if (buys.length === 0 && sells.length === 0) {
@@ -1242,12 +1428,37 @@ function renderReport(json) {
 
   // Full table
   const fullHTML = `
-    <div class="section-label" style="margin-top:8px"><span style="font-size:14px">\u25A6</span> All Symbols</div>
+    <div class="section-label" style="margin-top:8px"><span style="font-size:14px">▦</span> All Symbols</div>
     ${buildReportTable(data)}`;
 
   el.innerHTML = summaryHTML + highConfHTML + fullHTML;
 }
 
+// C-12: status-banner helper with parseable-timestamp fallback.
+// The raw string coming in SHOULD be an ISO datetime (api_server.py fills
+// it in, with a file-mtime fallback) but we don't trust it blindly — a
+// future server path could regress to a non-parseable format and the UI
+// used to happily render "Invalid Date" in that case. Instead we render
+// an actionable "click Refresh Report" fallback using the approved copy.
+function renderReportStatusBanner(statusEl, generatedAt, summary, data) {
+  if (!statusEl) return;
+  let dt = null;
+  if (generatedAt) {
+    const parsed = new Date(generatedAt);
+    if (!Number.isNaN(parsed.getTime())) dt = parsed;
+  }
+  if (dt) {
+    const timeStr = dt.toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+    statusEl.innerHTML = `<div class="scan-banner" style="border-color:var(--green-border)">
+      Report generated: ${timeStr} | ${summary.total_symbols || data.length} symbols analyzed</div>`;
+  } else {
+    // Exact copy approved by reviewers (C-12 fallback).
+    statusEl.innerHTML = `<div class="scan-banner" style="border-color:var(--yellow-border);color:var(--yellow-text)">
+      Generated: recently (timestamp unavailable &mdash; click Refresh Report to regenerate)
+      <button class="btn-sm" style="margin-left:10px" onclick="refreshReport()">Refresh Report</button>
+    </div>`;
+  }
+}
 // ── Sortable report table ──
 let _reportTableId = 0;  // unique ID per table instance
 
@@ -1693,7 +1904,20 @@ async function loadLibrary() {
       renderLibraryTable(json);
     } else {
       callout.innerHTML = '';
-      tableWrap.innerHTML = `<div class="scan-banner">No backtest results cached yet. Click "Run All Backtests" to generate comparison data for all ${json.symbols_total || 73} symbols.</div>`;
+      // H-11: honest-timing skeleton empty state; role=status for screen readers.
+      const lsLab = json.symbols_total || STRATEGY_LAB_TICKER_COUNT;
+      tableWrap.innerHTML = `
+        <div class="skeleton-empty" role="status" aria-live="polite"
+             aria-label="No backtests cached yet, first run takes about 1 to 3 hours">
+          <div class="se-title">No backtests cached yet</div>
+          <div class="se-body">
+            Running all strategies across <strong>${lsLab}</strong> tickers takes
+            about <span class="se-time">1&ndash;3 hours</span> the first time;
+            already-tested tickers are skipped on later runs, so repeat batches
+            finish in <span class="se-time">~10 min</span>. Safe to close the tab
+            &mdash; it runs in the background.
+          </div>
+        </div>`;
     }
 
     // If a batch is already running, reflect that
@@ -2173,12 +2397,25 @@ async function loadLeaders(force=false) {
 
     if (!universe.length && !leaderSyms.size) {
       controls.style.display = 'none';
+      // H-11: honest-timing skeleton empty state. CLI commands move into an
+      // <details> block — primary CTA stays "Rebuild Now" in the header row.
       content.innerHTML = `
-        <div class="error-box" style="background:var(--yellow-bg);border-color:var(--yellow-border);color:var(--yellow-text)">
-          <strong>No universe data yet.</strong><br>
-          Run <code>python universe_builder.py --build</code> then
-          <code>python fundamental_screener.py --universe universe_prescreened.csv --csv-out screener_results.csv</code>
-          to populate. Or click <strong>Rebuild Now</strong> above to run the full pipeline in the background.
+        <div class="skeleton-empty" role="status" aria-live="polite"
+             aria-label="No leader data yet, cold rebuild takes about three and a half hours">
+          <div class="se-title">No leader data yet</div>
+          <div class="se-body">
+            A full rebuild pulls fresh SEC filings for
+            <strong>${LEADER_UNIVERSE_SIZE}</strong> companies and scores them
+            &mdash; cold run <span class="se-time">~3.5 hours</span>, cached
+            <span class="se-time">~10 min</span>. It runs in the background;
+            you&rsquo;ll see progress here. Click
+            <strong>Rebuild Now</strong> above to start.
+          </div>
+          <details>
+            <summary>Advanced: rebuild from the command line</summary>
+            <pre>python universe_builder.py --build
+python fundamental_screener.py --universe universe_prescreened.csv --csv-out screener_results.csv</pre>
+          </details>
         </div>`;
       meta.textContent = 'No data';
       _leadersLoaded = true;
@@ -2491,12 +2728,117 @@ function escapeHTML(s) {
 }
 
 // ── Rebuild + polling ──
-async function rebuildLeaders() {
-  const btn = document.getElementById('btnRebuildLeaders');
-  const status = document.getElementById('leadersStatus');
-  if (!confirm('Rebuild the leader universe?\n\nThis kicks off a multi-hour background job (metadata gather + SEC fetch + screen + select). You can keep using the app while it runs. Cold rebuild takes ~3.5 hours; warm reruns (using checkpoints + 90-day XBRL cache) take ~10 min.')) {
+// H-12: rebuildLeaders() now opens a proper a11y modal (see #rebuildModal
+// markup above the main <script>). The modal owns the user confirmation —
+// it calls startRebuildJob() once the REBUILD token is validated.
+function rebuildLeaders() {
+  openRebuildModal();
+}
+
+// H-12: modal state + focus handling.
+// Focusable order (for Tab trap): token input, Cancel, Start rebuild.
+let _rebuildModalKeyHandler = null;
+let _rebuildModalPrevFocus = null;
+
+function openRebuildModal() {
+  const modal    = document.getElementById('rebuildModal');
+  const tokenEl  = document.getElementById('rebuildToken');
+  const errorEl  = document.getElementById('rebuildModalError');
+  const lastEl   = document.getElementById('rebuildModalLast');
+  const overlay  = modal;  // overlay === the root element
+  const cancel   = document.getElementById('rebuildModalCancel');
+  const startBtn = document.getElementById('rebuildModalStart');
+  if (!modal) return;
+
+  // Last-rebuild timestamp with recency color per H-12 spec.
+  //   missing  -> "Never — cold run expected"   amber
+  //   <7 days  -> muted grey
+  //   >90 days -> amber
+  //   else     -> neutral
+  lastEl.classList.remove('recent', 'stale', 'never');
+  const mtimeIso = _leadersMeta && _leadersMeta.leaders_mtime;
+  if (!mtimeIso) {
+    lastEl.textContent = 'Never — cold run expected';
+    lastEl.classList.add('never');
+  } else {
+    const mtime = new Date(mtimeIso);
+    const ageDays = (Date.now() - mtime.getTime()) / 86400000;
+    lastEl.textContent = 'Last rebuild: ' + fmtCachedAt(mtimeIso);
+    if (ageDays < 7)       lastEl.classList.add('recent');
+    else if (ageDays > 90) lastEl.classList.add('stale');
+    // else neutral — no extra class
+  }
+
+  tokenEl.value = '';
+  errorEl.textContent = '';
+  _rebuildModalPrevFocus = document.activeElement;
+  modal.hidden = false;
+  // Initial focus on the token input (H-12 spec).
+  setTimeout(() => tokenEl.focus(), 0);
+
+  // Wire handlers fresh each open so we don't stack listeners.
+  cancel.onclick = closeRebuildModal;
+  startBtn.onclick = onRebuildModalSubmit;
+  tokenEl.onkeydown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); onRebuildModalSubmit(); }
+  };
+  // Overlay click (outside the card) closes.
+  overlay.onclick = (e) => { if (e.target === overlay) closeRebuildModal(); };
+
+  // Esc + Tab focus trap (3 focusables, wraps both directions).
+  _rebuildModalKeyHandler = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); closeRebuildModal(); return; }
+    if (e.key === 'Tab') {
+      const focusables = [tokenEl, cancel, startBtn];
+      const idx = focusables.indexOf(document.activeElement);
+      if (e.shiftKey) {
+        if (idx <= 0) { e.preventDefault(); focusables[focusables.length - 1].focus(); }
+      } else {
+        if (idx === focusables.length - 1) { e.preventDefault(); focusables[0].focus(); }
+        else if (idx === -1)               { e.preventDefault(); focusables[0].focus(); }
+      }
+    }
+  };
+  document.addEventListener('keydown', _rebuildModalKeyHandler, true);
+}
+
+function closeRebuildModal() {
+  const modal = document.getElementById('rebuildModal');
+  if (!modal || modal.hidden) return;
+  modal.hidden = true;
+  if (_rebuildModalKeyHandler) {
+    document.removeEventListener('keydown', _rebuildModalKeyHandler, true);
+    _rebuildModalKeyHandler = null;
+  }
+  // Restore focus to the Rebuild Now button (H-12 spec).
+  const restore = _rebuildModalPrevFocus && document.body.contains(_rebuildModalPrevFocus)
+    ? _rebuildModalPrevFocus
+    : document.getElementById('btnRebuildLeaders');
+  _rebuildModalPrevFocus = null;
+  if (restore && typeof restore.focus === 'function') {
+    try { restore.focus(); } catch (_) { /* noop */ }
+  }
+}
+
+function onRebuildModalSubmit() {
+  const tokenEl = document.getElementById('rebuildToken');
+  const errorEl = document.getElementById('rebuildModalError');
+  // H-12 spec: Start button is ALWAYS focusable (never disabled). Validate here.
+  const token = (tokenEl.value || '').trim().toUpperCase();
+  if (token !== 'REBUILD') {
+    errorEl.textContent = 'Type REBUILD to confirm';
+    tokenEl.focus();
+    tokenEl.select();
     return;
   }
+  errorEl.textContent = '';
+  closeRebuildModal();
+  startRebuildJob();
+}
+
+async function startRebuildJob() {
+  const btn = document.getElementById('btnRebuildLeaders');
+  const status = document.getElementById('leadersStatus');
   btn.disabled = true;
   btn.textContent = 'Starting\u2026';
   status.innerHTML = '';

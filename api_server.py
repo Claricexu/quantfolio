@@ -584,7 +584,9 @@ async def api_report(refresh: bool = False):
             thread.start()
             return JSONResponse({
                 "status": "scan_started",
-                "message": "Dual-model report started. This may take 40-90 minutes.",
+                # C-11: banner band — keep in sync with DAILY_REPORT_EST in
+                # frontend/index.html and USER_GUIDE.md Parts 4 & 11.
+                "message": "Dual-model report started. This may take 25-55 minutes.",
                 "data": snap_data,
                 "generated_at": snap_at,
             })
@@ -624,9 +626,19 @@ def _load_latest_report_from_disk():
             latest = os.path.join(CACHE_DIR, report_files[-1])
             with open(latest) as f:
                 data = json.load(f)
+            # C-12: derive a parseable ISO timestamp. Prefer the embedded summary
+            # value; fall back to the file's mtime (NOT the filename string,
+            # which was 'dual_report_YYYYMMDD_HHMM.json' and broke Date parsing
+            # on the frontend → "Invalid Date").
+            gen_at = data.get('summary', {}).get('generated_at')
+            if not gen_at:
+                try:
+                    gen_at = datetime.fromtimestamp(os.path.getmtime(latest)).isoformat()
+                except Exception:
+                    gen_at = None
             with _report_lock:
                 _report_cache["data"] = data
-                _report_cache["generated_at"] = data.get('summary', {}).get('generated_at', report_files[-1])
+                _report_cache["generated_at"] = gen_at
             print(f"[Startup] Loaded dual report from {report_files[-1]}")
     except Exception as exc:
         print(f"[Startup] No cached dual report: {exc}")

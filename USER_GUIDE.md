@@ -190,7 +190,7 @@ The Daily Report auto-scans **all 174 symbols** (100 automated leaders plus your
 ### When it runs
 
 - **Automatically** at **4:05 PM EST** on trading days (Monday-Friday), just after US market close
-- **Manually** by clicking the **Refresh** button on the Daily Report tab (takes 2-5 minutes)
+- **Manually** by clicking the **Refresh** button on the Daily Report tab (typically 25-55 minutes on a laptop; the UI banner shows the same band)
 
 ### What's on the page
 
@@ -515,7 +515,7 @@ You probably don't have Git installed. Either:
 | **"ModuleNotFoundError"** | Run `pip install -r requirements.txt` again. |
 | **Dashboard won't load in browser** | Make sure the black Command Prompt window is still running. Try http://127.0.0.1:8000 instead of localhost. |
 | **"Port 8000 in use"** | Another program is using that port. Close it, or edit `PORT = 8000` inside `api_server.py`. |
-| **First scan takes forever** | Normal. First-ever scan fetches data for 174 symbols and trains models. Expect 5-10 minutes. |
+| **First scan takes forever** | Normal. A full dual-model scan of all 174 symbols typically takes 25-55 minutes on a laptop (the UI banner and `/api/report` both cite this band). The first run is at the high end because nothing is cached. |
 | **Backtest says "file not found"** | The ticker isn't cached yet. Look it up on the dashboard once, then try again. |
 | **Best Strategy shows "—"** | Click "Run All Backtests" in Strategy Lab to generate data. |
 | **Daily Report shows yesterday's prices** | The scheduled run happens at 4:05 PM EST. Before that, you'll see the previous trading day. Hit Refresh manually after 4:05 PM EST to force an update. |
