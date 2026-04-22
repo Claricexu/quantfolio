@@ -70,7 +70,7 @@ REM --- C-10: lightgbm is OPTIONAL. Warn instead of hard-failing. -----------
 python -c "import lightgbm" >nul 2>&1
 if errorlevel 1 (
     if "%FULL_INSTALL%"=="1" (
-        echo Installing lightgbm (enables Pro / v3 predictions)...
+        echo Installing lightgbm ^(enables Pro / v3 predictions^)...
         python -m pip install lightgbm
         python -c "import lightgbm" >nul 2>&1
         if errorlevel 1 (
@@ -81,9 +81,9 @@ if errorlevel 1 (
         )
     ) else (
         echo.
-        echo WARNING: lightgbm is not installed. Pro (v3) predictions will show "Not available".
+        echo WARNING: lightgbm is not installed. Pro ^(v3^) predictions will show "Not available".
         echo          To enable Pro, close this window and run: start_dashboard.bat --full-install
-        echo          (or ask your developer).
+        echo          ^(or ask your developer^).
         echo.
     )
 )
