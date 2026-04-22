@@ -405,6 +405,12 @@ function fetchTimeout(url, ms = 60000, opts = {}) {
 function fetchNoTimeout(url, opts = {}) {
   return fetch(url, opts);
 }
+// Subtle "still working" copy shared by loadReport / pollReport / pollBacktest.
+// Pluralize "second" properly: 0/2+ => plural, 1 => singular. (C-8 follow-up.)
+function _stillWorkingCopy(s) {
+  const unit = s === 1 ? 'second' : 'seconds';
+  return `Still working, last checked ${s} ${unit} ago`;
+}
 function fmt$(v) { return v != null ? '$' + Number(v).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) : '\u2014'; }
 function fmtCachedAt(iso) {
   if (!iso) return '';
@@ -1012,7 +1018,7 @@ async function loadReport() {
     const pse = document.getElementById('loadReportPollStatus');
     if (!pse) return;
     const s = Math.round((Date.now() - lastOk) / 1000);
-    pse.textContent = `Still working, last checked ${s} seconds ago`;
+    pse.textContent = _stillWorkingCopy(s);
   }, 1000);
   try {
     // Fetch report and screener in parallel — screener is non-blocking
@@ -1061,7 +1067,7 @@ function pollReport(statusEl) {
     const pse = document.getElementById('pollReportStatus');
     if (!pse) return;
     const s = Math.round((Date.now() - lastOk) / 1000);
-    pse.textContent = `Still working, last checked ${s} seconds ago`;
+    pse.textContent = _stillWorkingCopy(s);
   }, 1000);
   const iv = setInterval(async () => {
     attempts++;
@@ -1408,7 +1414,7 @@ async function pollBacktest() {
     const pse = document.getElementById('btPollStatus');
     if (!pse) return;
     const s = Math.round((Date.now() - lastOk) / 1000);
-    pse.textContent = `Still working, last checked ${s} seconds ago`;
+    pse.textContent = _stillWorkingCopy(s);
   }, 1000);
 
   const check = async () => {
