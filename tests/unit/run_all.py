@@ -12,7 +12,12 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from tests.unit import test_config_hash, test_backtest_engine_edge_cases, test_backtest_engine_basic
+from tests.unit import (
+    test_config_hash,
+    test_backtest_engine_edge_cases,
+    test_backtest_engine_basic,
+    test_api_backtest_wire_format,
+)
 
 
 def main() -> int:
@@ -21,6 +26,7 @@ def main() -> int:
         ("test_config_hash", test_config_hash),
         ("test_backtest_engine_edge_cases", test_backtest_engine_edge_cases),
         ("test_backtest_engine_basic", test_backtest_engine_basic),
+        ("test_api_backtest_wire_format", test_api_backtest_wire_format),
     ):
         print(f"\n=== {name} ===")
         fails = mod.run_all()

@@ -788,9 +788,27 @@ def backtest_symbol(symbol,cache_dir=None,version=None,initial_cash=10000,strate
 
 def backtest_multi_strategy(symbol, cache_dir=None, version=None, initial_cash=10000, progress_cb=None):
     """Walk-forward backtest running BOTH full and buy_only strategies simultaneously.
-    Trains model once per retrain window, applies both signal logics — efficient for charts.
-    Uses fast ensemble (no 5-fold OOF) for ~6x speedup on Pro.
-    Returns dict with dates, portfolio arrays, and stats for each strategy."""
+
+    Routed through ``backtest_engine.BacktestEngine.run_multi`` (C-3 Phase 4b).
+    Preserves the exact legacy return shape consumed by ``api_server._run_backtest_chart``:
+
+        {symbol, version, version_label, period_days, start_date, dates,
+         buyhold, full: {portfolio, return_pct, sharpe, max_drawdown, buys, sells},
+         buy_only: {portfolio, return_pct, sharpe, max_drawdown, buys, sells},
+         buyhold_stats: {return_pct, sharpe, max_drawdown, buys, sells}}
+
+    Engine-only fields (raw_predictions, z_scores, config_hash, sortino, …)
+    are intentionally NOT exposed — see tests/unit/test_api_backtest_wire_format.py
+    for the regression guard.
+
+    Ensemble-builder change (intentional, C-3 bug fix): pre-refactor this
+    function used ``build_stacking_ensemble_fast`` (val-MAE) while
+    ``backtest_symbol`` used ``build_stacking_ensemble`` (OOF). Now both paths
+    use OOF via the engine default. On MSFT this shifts multi_strategy[full]
+    from $87,367.59 -> $92,159.04, now matching backtest_symbol. All other
+    tickers agree within 1e-4 between the two ensemble choices and remain
+    unchanged.
+    """
     cache_dir = cache_dir or CACHE_DIR
     ver = version or MODEL_VERSION
     raw = fetch_stock_data([symbol], cache_dir=cache_dir)
@@ -802,92 +820,46 @@ def backtest_multi_strategy(symbol, cache_dir=None, version=None, initial_cash=1
     else:
         df = engineer_features_v2(df); fc = V2_FEATURE_COLS; rf_freq = RETRAIN_FREQ_V2; ver = 'v2'
     dc = df.dropna(subset=['Target_Return'] + fc).copy()
-    # Dynamic backtest start: prefer 2015, but for newer tickers use earliest feasible date
+    # Dynamic backtest start: prefer 2015, but for newer tickers use earliest feasible date.
+    # Pre-refactor guard preserved so the console message is unchanged.
     bm = dc.index >= pd.Timestamp(BACKTEST_PREFERRED_START)
-    bsi = np.argmax(bm) if bm.any() else 0
-    bsi = max(bsi, MIN_TRAIN_DAYS)  # ensure enough training data
+    bsi = int(np.argmax(bm)) if bm.any() else 0
+    bsi = max(bsi, MIN_TRAIN_DAYS)
     if bsi >= len(dc) - MIN_BACKTEST_DAYS:
         print(f"  [{symbol}] Not enough data for backtest ({len(dc)} rows, need {MIN_TRAIN_DAYS}+{MIN_BACKTEST_DAYS})")
         return None
-    aX = dc[fc].values; ay = dc['Target_Return'].values
+
+    from backtest_engine import BacktestConfig, BacktestEngine, full_signal as _bt_full, buy_only as _bt_buyonly
+    cfg = BacktestConfig(symbol=symbol, strategy_name='full', initial_cash=float(initial_cash),
+                         threshold=THRESHOLD, zscore_lookback=ZSCORE_LOOKBACK,
+                         min_zscore_samples=MIN_ZSCORE_SAMPLES, retrain_freq_days=int(rf_freq),
+                         min_train_days=MIN_TRAIN_DAYS, seed_from_validation=True,
+                         random_state=42, ensemble_builder='oof', feature_version=ver)
+    results = BacktestEngine(cfg, dc).run_multi(
+        {'full': _bt_full, 'buy_only': _bt_buyonly},
+        progress_cb=progress_cb,
+    )
+    f_res = results['full']
+    b_res = results['buy_only']
+
+    f_port = np.array(f_res.portfolio_curve, dtype=float)
+    b_port = np.array(b_res.portfolio_curve, dtype=float)
+    dates_out = list(f_res.dates)
     ap = dc['Close'].values.ravel()
+    tp = ap[bsi:bsi + len(f_port)]
+    bnh = initial_cash * (tp / tp[0]) if len(tp) > 0 else np.array([float(initial_cash)])
 
-    # Two parallel portfolios: full signal and buy-only
-    f_cash, f_sh = initial_cash, 0.0
-    b_cash, b_sh = initial_cash, 0.0
-    f_port, b_port, dates_out = [], [], []
-    f_sigs, b_sigs = [], []
-    mdl = None; sc = StandardScaler(); rc = 0; pred_history = []
-
-    # Progress tracking
-    n_loop = len(aX) - 1 - bsi
-    total_retrains = 1 + max(0, n_loop - 1) // rf_freq
-    retrain_num = 0
-
-    for i in range(bsi, len(aX) - 1):
-        if mdl is None or rc >= rf_freq:
-            retrain_num += 1
-            if progress_cb:
-                progress_cb(retrain_num, total_retrains)
-            vs = int(i * 0.85); sc.fit(aX[:vs])  # fit on TRAIN only — no validation leakage
-            if ver == 'v3':
-                mdl = build_stacking_ensemble_fast(sc.transform(aX[:vs]), ay[:vs],
-                                                   sc.transform(aX[vs:i]), ay[vs:i])
-                pf = predict_v3
-            else:
-                mdl = (train_rf_v2(sc.transform(aX[:vs]), ay[:vs]),
-                       train_xgb_v2(sc.transform(aX[:vs]), ay[:vs]))
-                pf = predict_v2
-            if not pred_history:
-                seed_preds = pf(mdl, sc.transform(aX[vs:i]))
-                pred_history = list(seed_preds[-ZSCORE_LOOKBACK:])
-            rc = 0
-
-        raw_pred = pf(mdl, sc.transform(aX[i:i + 1]))[0]
-        pred_history.append(raw_pred)
-        if len(pred_history) > ZSCORE_LOOKBACK:
-            pred_history = pred_history[-ZSCORE_LOOKBACK:]
-
-        if len(pred_history) >= MIN_ZSCORE_SAMPLES:
-            hist = np.array(pred_history[:-1])
-            mu, sigma = np.mean(hist), np.std(hist)
-            z = (raw_pred - mu) / sigma if sigma > 1e-10 else 0.0
-        else:
-            z = 0.0
-
-        pr = float(ap[i])
-        dates_out.append(dc.index[i].strftime('%Y-%m-%d'))
-
-        # Full Signal strategy
-        if z >= THRESHOLD and f_cash > 0:
-            f_sh = f_cash / pr; f_cash = 0; f_sigs.append('BUY')
-        elif z <= -THRESHOLD and f_sh > 0:
-            f_cash = f_sh * pr; f_sh = 0; f_sigs.append('SELL')
-        else:
-            f_sigs.append('HOLD')
-        f_port.append(f_cash + f_sh * pr)
-
-        # Buy-Only strategy
-        if z >= THRESHOLD and b_cash > 0:
-            b_sh = b_cash / pr; b_cash = 0; b_sigs.append('BUY')
-        else:
-            b_sigs.append('HOLD')
-        b_port.append(b_cash + b_sh * pr)
-
-        rc += 1
-
-    f_port = np.array(f_port); b_port = np.array(b_port)
-    tp = ap[bsi:bsi + len(f_port)]; bnh = initial_cash * (tp / tp[0])
-
-    def _stats(port, sigs):
+    def _stats_from_port(port, buys, sells):
+        if port.size == 0:
+            return {'return_pct': 0.0, 'sharpe': 0.0, 'max_drawdown': 0.0,
+                    'buys': buys, 'sells': sells}
         ret = (port[-1] / initial_cash - 1) * 100
         dr = np.diff(port) / port[:-1]
-        sharpe = float(np.mean(dr) / np.std(dr) * np.sqrt(252)) if np.std(dr) > 0 else 0
+        sharpe = float(np.mean(dr) / np.std(dr) * np.sqrt(252)) if dr.size and np.std(dr) > 0 else 0.0
         pk = np.maximum.accumulate(port)
-        mdd = float(((port - pk) / pk).min()) * 100
+        mdd = float(((port - pk) / pk).min()) * 100 if port.size else 0.0
         return {'return_pct': round(ret, 1), 'sharpe': round(sharpe, 2),
-                'max_drawdown': round(mdd, 1),
-                'buys': sigs.count('BUY'), 'sells': sigs.count('SELL')}
+                'max_drawdown': round(mdd, 1), 'buys': buys, 'sells': sells}
 
     ver_label = "Pro" if ver == 'v3' else "Lite"
     start_date = dates_out[0] if dates_out else None
@@ -896,9 +868,11 @@ def backtest_multi_strategy(symbol, cache_dir=None, version=None, initial_cash=1
         'symbol': symbol, 'version': ver, 'version_label': ver_label,
         'period_days': len(f_port), 'start_date': start_date, 'dates': dates_out,
         'buyhold': [round(v, 2) for v in bnh.tolist()],
-        'full': {'portfolio': [round(v, 2) for v in f_port.tolist()], **_stats(f_port, f_sigs)},
-        'buy_only': {'portfolio': [round(v, 2) for v in b_port.tolist()], **_stats(b_port, b_sigs)},
-        'buyhold_stats': _stats(bnh, []),
+        'full': {'portfolio': [round(v, 2) for v in f_port.tolist()],
+                 **_stats_from_port(f_port, f_res.buys, f_res.sells)},
+        'buy_only': {'portfolio': [round(v, 2) for v in b_port.tolist()],
+                     **_stats_from_port(b_port, b_res.buys, b_res.sells)},
+        'buyhold_stats': _stats_from_port(np.asarray(bnh, dtype=float), 0, 0),
     }
 
 

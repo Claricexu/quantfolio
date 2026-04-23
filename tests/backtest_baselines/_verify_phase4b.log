@@ -1,0 +1,44 @@
+﻿[verify-4b] tickers (7): ['AAPL', 'JNJ', 'KO', 'MSFT', 'NVDA', 'SHORTHIST_AAPL', 'SPY']
+[verify-4b] === AAPL ===
+  [Pro] Multi-strategy backtest done �� 2840 days from 2015-01-02
+[verify-4b] === JNJ ===
+  [Pro] Multi-strategy backtest done �� 2840 days from 2015-01-02
+[verify-4b] === KO ===
+  [Pro] Multi-strategy backtest done �� 2840 days from 2015-01-02
+[verify-4b] === MSFT ===
+  [Pro] Multi-strategy backtest done �� 2840 days from 2015-01-02
+
+============================================================
+  BACKTEST: MSFT (Pro, Full Signal, Z-score ��2.5��)
+============================================================
+  Period: 2840 days | Signals: 10 BUY, 9 SELL, 2821 HOLD
+  Strategy: +882.6% | B&H: +951.3% | Sharpe: 0.97 | MaxDD: -37.0%
+[verify-4b] === NVDA ===
+  [Pro] Multi-strategy backtest done �� 2840 days from 2015-01-02
+[verify-4b] === SHORTHIST_AAPL ===
+  [Pro] Multi-strategy backtest done �� 475 days from 2024-05-28
+[verify-4b] === SPY ===
+  [Pro] Multi-strategy backtest done �� 2840 days from 2015-01-02
+
+ticker            sub                ref_final         eng_final  match  reason
+------------------------------------------------------------------------------------------------------------------------
+AAPL              full           $121,440.8253     $121,440.8300  PASS   identical within 1e-4
+AAPL              buy_only        $97,292.0276      $97,292.0300  PASS   identical within 1e-4
+JNJ               full            $22,331.2719      $22,331.2700  PASS   identical within 1e-4
+JNJ               buy_only        $30,498.2295      $30,498.2300  PASS   identical within 1e-4
+KO                full            $25,625.1512      $25,625.1500  PASS   identical within 1e-4
+KO                buy_only        $26,900.3256      $26,900.3300  PASS   identical within 1e-4
+MSFT              full            $98,255.5052      $98,255.5100  PASS   identical within 1e-4
+MSFT              buy_only       $119,084.0158     $119,084.0200  PASS   identical within 1e-4
+NVDA              full         $1,506,286.0530   $1,506,286.0500  PASS   identical within 1e-4
+NVDA              buy_only     $4,140,089.4918   $4,140,089.4900  PASS   identical within 1e-4
+SHORTHIST_AAPL    full             $9,827.6126       $9,827.6100  PASS   identical within 1e-4
+SHORTHIST_AAPL    buy_only        $12,052.9590      $12,052.9600  PASS   identical within 1e-4
+SPY               full            $46,854.4216      $46,854.4200  PASS   identical within 1e-4
+SPY               buy_only        $40,583.4261      $40,583.4300  PASS   identical within 1e-4
+MSFT              xcheck          $98,255.5052      $98,255.5100  PASS   multi_strategy[full] == backtest_symbol within 1e-4
+
+[verify-4b] buy_only: 7/7 PASS within 1e-4
+[verify-4b] full:     7/7 PASS within 1e-4 (MSFT may diverge vs val-MAE ref on some days �� see below)
+[verify-4b] MSFT: val-MAE ref and OOF engine agree within 1e-4 today �� the two ensemble choices happen to produce the same rounded curve on current data; C-3 is still structurally fixed (both paths forced through OOF engine).
+[verify-4b] OK �� buy_only 7/7, full 7/7, MSFT xcheck PASS
