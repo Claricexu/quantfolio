@@ -34,6 +34,7 @@ Finance/
 │
 ├── Layer 2 — ML engine
 │   ├── finance_model_v2.py       # Lite (v2) + Pro (v3) models both live here
+│   ├── backtest_engine.py        # Unified walk-forward simulator (C-3 Phase 2+; used by all three callers)
 │   ├── finance_model_v4_2pct.py  # Sensitivity-study variant (CLI only)
 │   ├── backtest_old_vs_new.py    # Compare legacy vs current model (CLI only)
 │   ├── backtest_buy_hold.py      # Compare Buy-Only vs Full Signal across tickers
@@ -41,11 +42,16 @@ Finance/
 │
 ├── Layer 1 — Leader Detector pipeline
 │   ├── universe_builder.py       # Phase 1.0/1.1 — SEC tickers → universe_prescreened.csv
-│   ├── edgar_fetcher.py          # Phase 1.2 — XBRL facts → fundamentals.db
+│   ├── edgar_fetcher.py          # Phase 1.2 — XBRL facts → fundamentals.db (WAL-mode)
 │   ├── fundamental_metrics.py    # Phase 1.3a — 15 metric computations
 │   ├── fundamental_screener.py   # Phase 1.3b — archetype classifier + verdicts
+│   ├── verdict_provider.py       # Single-source-of-truth loader for screener_results.csv (Bucket 2)
 │   ├── leader_selector.py        # Phase 1.4 — writes leaders.csv
-│   └── prescreen_rules.json      # Prescreen thresholds (tunable config)
+│   └── prescreen_rules.json      # Prescreen thresholds (6 rules, tunable config)
+│
+├── tests/
+│   ├── unit/                     # 24 plain-assert tests (see §8)
+│   └── backtest_baselines/       # Live-vs-live verify scripts for C-3 refactor
 │
 ├── diagnostics/                  # 18 one-off scripts (see §10)
 │
@@ -53,6 +59,7 @@ Finance/
 │   ├── README.md                 # Product overview, architecture, API reference
 │   ├── USER_GUIDE.md             # Non-technical end-user walkthrough
 │   ├── DEVELOPMENT.md            # ← You are here
+│   ├── CHANGELOG.md              # User-facing release notes (rounds 1-3)
 │   ├── good_firm_framework.md    # Deep spec on archetype rubric + Phase 2 backlog
 │   └── TWO_LAYER_ARCHITECTURE_PLAN.md   # Decision log for the Layer 1 build
 │
@@ -61,7 +68,8 @@ Finance/
 │   └── leaders.csv               # Layer 1 output (100 picks), gitignored
 │
 └── Config
-    ├── requirements.txt
+    ├── requirements.txt          # Pinned versions (Round 2, C-7)
+    ├── requirements.lock         # `pip freeze` capture for reproducibility
     ├── .env.example              # Template (tracked)
     ├── .env                      # Local secrets (gitignored)
     └── .gitignore
@@ -74,6 +82,8 @@ Finance/
 - **Layer 2 (stable, do not touch casually):** FastAPI backend → runs Lite/Pro models on a universe of 174 symbols → serves predictions + backtests to the dashboard. See [README.md](README.md) for the full tour.
 - **Layer 1 (pipeline):** SEC EDGAR → ~2,500 tickers → prescreen to ~1,414 → fundamentals screen by archetype → top 100 → `leaders.csv`. See [good_firm_framework.md](good_firm_framework.md) for the rubric and [TWO_LAYER_ARCHITECTURE_PLAN.md](TWO_LAYER_ARCHITECTURE_PLAN.md) for the decision history.
 - **The bridge:** [`get_all_symbols()`](finance_model_v2.py:146) in `finance_model_v2.py` reads `leaders.csv ∪ Tickers.csv` and exposes the 174-symbol universe to Layer 2.
+- **BacktestEngine ([`backtest_engine.py`](backtest_engine.py)):** One walk-forward simulator shared by `predict_ticker`, `backtest_symbol`, and `backtest_multi_strategy`. Before Round 3 each caller had its own loop with different guards and different ensemble builders — same ticker could report different Sharpe. Now: one `BacktestConfig` → one `run(strategy_fn)` call path → one `config_hash` (SHA-256) that changes whenever training does. `MIN_ZSCORE_SAMPLES` is enforced inside the engine, not the callers. Only `ensemble_builder='oof'` is supported; the legacy val-MAE `fast` builder was deleted in C-3 Phase 5. See [round3-summary.md](round3-summary.md) for the full refactor.
+- **Verdict loader ([`verdict_provider.py`](verdict_provider.py)):** Single source of truth for fundamental verdicts across all four tabs. Reads `screener_results.csv` with an mtime-keyed in-process cache so Lookup / Report / Leader surfaces can never disagree (Round 2 C-1).
 
 ---
 
@@ -141,12 +151,15 @@ Both run in the in-process `BackgroundScheduler`. If APScheduler isn't installed
 | Cache | TTL | Location | Invalidated by |
 |---|---|---|---|
 | Price CSVs | Per trading day | `data_cache/*.csv` | Delete the file to force re-fetch |
-| Daily report | 22 hours | In-memory + `data_cache/report_cache.json` | `?refresh=true` on `/api/report` |
-| Backtest JSONs | 7 days | `data_cache/backtest_*.json` | `?refresh=true` on `/api/backtest-chart/*` |
-| SEC XBRL facts | 90 days | `fundamentals.db` | `edgar_fetcher.py --refresh` |
+| Daily report (in-memory) | None at `/api/report` (serves whatever's newest); 22 h on the Ticker Lookup fast-path | `_report_cache` dict + `data_cache/dual_report_<YYYYMMDD_HHMM>.json` on disk | `?refresh=true` on `/api/report` kicks a background rerun; disk file is rewritten after each scan |
+| Backtest JSONs | 7 days | `data_cache/backtest_chart_<SYMBOL>.json` | `?refresh=true` on `/api/backtest-chart/{symbol}` |
+| Fundamental verdicts | mtime-keyed (CSV change = automatic invalidation) | In-process `verdict_provider._cache_state` over `screener_results.csv` | Any rewrite of `screener_results.csv` (e.g. `fundamental_screener.py --all` or a Layer 1 rebuild) |
+| SEC XBRL facts | 90 days | `fundamentals.db` (SQLite, WAL mode) | `edgar_fetcher.py --refresh` |
 | SEC ticker list | Per rebuild | `universe_raw.csv` | `universe_builder.py --build` |
 
 `data_cache/` is gitignored and auto-created at launch.
+
+**Known gap (audit H-2):** `/api/report` does not apply a TTL to the disk-loaded report on startup, so after a long weekend the dashboard can serve Friday's report as "today." The 22 h TTL lives only on `_get_cached_compare_result()` (the Ticker Lookup same-day fast-path).
 
 ---
 
@@ -155,7 +168,9 @@ Both run in the in-process `BackgroundScheduler`. If APScheduler isn't installed
 | API | Used by | Rate limit | Auth |
 |---|---|---|---|
 | **Yahoo Finance** (yfinance) | [`finance_model_v2.py`](finance_model_v2.py), pricing + `.info` for SVR | Informal — ~2 req/sec is safe; 1-minute cool-downs on burst | None, but IP-based rate limits can bite |
-| **SEC EDGAR** | [`edgar_fetcher.py`](edgar_fetcher.py), [`universe_builder.py`](universe_builder.py), diagnostics | **Hard: 10 req/sec**. Cold universe fetch ≈ 3.5 hrs | `User-Agent` header required with a real contact email (see `SEC_USER_AGENT` in `.env`) |
+| **SEC EDGAR** | [`edgar_fetcher.py`](edgar_fetcher.py), [`universe_builder.py`](universe_builder.py), diagnostics | **SEC cap: 10 req/sec.** We aim under it via `RATE_LIMIT_SLEEP = 0.12 s` (~8 req/sec target). See known deviation below. | `User-Agent` header required with a real contact email (see `SEC_USER_AGENT` in `.env`) |
+
+**Known deviation (audit C-4, open):** the 0.12 s sleep is applied *per ticker* in `fetch_all`, with one additional sleep between the `companyfacts` and `submissions` calls inside `fetch_one`. In practice observed bursts can reach ~16 req/sec when a ticker's two HTTP calls land inside a single outer sleep window. A single 429 currently drops that ticker from the run — `http_get_json` has no retry and no `Retry-After` handling. Fix deferred pending a shared-HTTP-client refactor (bundles with C-5).
 
 **If SEC starts returning 403s**, the User-Agent is either missing or non-identifying. Check [`edgar_fetcher.py:37`](edgar_fetcher.py:37) and verify `.env` is loading.
 
@@ -163,14 +178,41 @@ Both run in the in-process `BackgroundScheduler`. If APScheduler isn't installed
 
 ## 8. Testing
 
-**Known gap: there is no automated test suite.** Model correctness has been verified empirically via backtests (see README §Backtest Results), but there are no unit tests or integration tests.
+Round 3 (C-3) landed the first unit suite. It covers the BacktestEngine refactor only; broader coverage is still open.
 
-If you're adding tests, highest-leverage first targets:
+### 8.1 Unit tests — `tests/unit/`
 
-1. **`tests/test_screener_verdicts.py`** — anchor-test that KO/JNJ/PG/WMT/MCD land MATURE LEADER/GEM and NVDA/MSFT/META/CRWD/NOW land GROWTH LEADER/GEM. This is the single most important regression barrier.
+Plain-assert style (no pytest dependency); each test file exposes a `run_all()` function.
+
+| File | Count | What it guards |
+|---|---|---|
+| `test_config_hash.py` | 6 | `BacktestConfig.config_hash` is stable, sensitive to every field, and survives a round-trip through `asdict` |
+| `test_backtest_engine_edge_cases.py` | 10 | Gapped index rejection, empty frames, min-days guard, strategy callback contract |
+| `test_backtest_engine_basic.py` | 4 | Golden-path walk-forward; includes `test_run_equals_run_multi_single_key` regression guard (Phase 5) |
+| `test_api_backtest_wire_format.py` | 4 | `/api/backtest-chart/{symbol}` response shape — guards against engine-only fields leaking into the public contract |
+
+**Run all:** `python tests/unit/run_all.py` — completes in a few seconds; no network, no disk-heavy fixtures.
+
+Wiring into pytest also works (`pytest tests/unit`) — the files are plain-assert but pytest picks them up.
+
+### 8.2 Live-vs-live verify scripts — `tests/backtest_baselines/`
+
+Regression barrier for the C-3 refactor. Each script re-implements the pre-refactor reference loop inline and diffs it against the current `finance_model_v2` entrypoint on freshly-fetched data.
+
+- `verify_phase3.py` — `predict_ticker` (includes the SHORTHIST_AAPL known-good divergence from the `MIN_ZSCORE_SAMPLES` floor fix)
+- `verify_phase4a.py` — `backtest_symbol`
+- `verify_phase4b.py` — `backtest_multi_strategy` + MSFT cross-check (confirms the path that used to diverge now matches `backtest_symbol` on the same window)
+
+Each run takes a few minutes (it hits yfinance). Run after any change to `backtest_engine.py` or to one of the three wrappers.
+
+**Committed JSONs** under `tests/backtest_baselines/*.json` are historical artifacts from the Phase 1 snapshot — they have drifted as live data updates. Do not treat them as ground-truth for today; the verify scripts run their own reference loop in-script.
+
+### 8.3 Still-missing, high-leverage targets
+
+1. **`tests/test_screener_verdicts.py`** — anchor-test that KO/JNJ/PG/WMT/MCD land MATURE LEADER/GEM and NVDA/MSFT/META/CRWD/NOW land GROWTH LEADER/GEM. The single biggest regression barrier for the rubric (the Cat-A gap tickers CRWD/VLO/APA/FSLY should assert TAXONOMY_GAP).
 2. **`tests/test_env_config.py`** — verify `.env` loading doesn't silently disable SMTP.
-3. **`tests/test_feature_engineering.py`** — snapshot test that `engineer_features_v2()` and `engineer_features_v3()` produce the expected feature count (13 and 22) and no NaN leakage at the edges.
-4. **`tests/test_cache_ttl.py`** — verify the 22-hour report cache and 7-day backtest cache behave correctly across the TTL boundary.
+3. **`tests/test_feature_engineering.py`** — snapshot that `engineer_features_v2` / `engineer_features_v3` produce the expected feature count (13 / 22) and no NaN at the last row.
+4. **`tests/test_cache_ttl.py`** — verify the 22 h Ticker Lookup fast-path and the 7-day backtest TTL behave correctly across the boundary.
 
 Recommended stack: `pytest` + `pytest-mock` for the yfinance and SEC HTTP calls.
 
@@ -214,14 +256,20 @@ See the "Known Unfixable & Phase 2 Backlog" section in [good_firm_framework.md](
 
 ## 12. Common pitfalls
 
-| Symptom | Likely cause |
-|---|---|
-| `start_dashboard.bat` opens then immediately closes | Conda activation failed. Open Anaconda Prompt manually, `cd` to folder, run `python api_server.py` to see the real error. |
-| Email alerts silently stop firing | `.env` missing or `SMTP_ENABLED=false`. Check the Command Prompt console — it prints `[Alert] ...` lines when SMTP is wired up. |
-| Leader Detector rebuild hangs at "Fetching XBRL" | Normal — SEC's 10 req/sec floor makes cold rebuilds take ~3.5 hrs. Don't cancel; the fetch is resume-safe (cached rows skip). |
-| All models predict 0% change | Likely NaN leakage in feature engineering. Check the last 5 rows of the feature DataFrame — `.dropna()` should not eat today's row. |
-| `RandomForestRegressor` hangs on Windows | `n_jobs` is not 1 somewhere. Search for `n_jobs=` and confirm every instance is `n_jobs=1`. |
-| Batch backtest shows "cached" but results are stale | TTL on backtest JSONs is 7 days. Force-refresh via `?refresh=true` on `/api/backtest-chart/{symbol}`. |
+Status column: **guarded** = code now prevents the failure from happening silently. **advisory** = still a runtime-only behaviour; if you see the symptom, the cause below is what to check.
+
+| Symptom | Status | Likely cause |
+|---|---|---|
+| `start_dashboard.bat` opens then immediately closes | partially guarded | Round 2 (C-10) expanded the startup import probe to the full top-level deps (`fastapi`, `uvicorn`, `pandas`, `numpy`, `sklearn`, `yfinance`, `xgboost`, `lightgbm`, `apscheduler`) so most "missing package → crash" paths now print a clear install instruction. A failed *conda activation* still closes silently — open Anaconda Prompt manually and run `python api_server.py` to see the real error. |
+| Email alerts silently stop firing | advisory | `.env` missing or `SMTP_ENABLED=false`. Check the Command Prompt console — it prints `[Alert] ...` lines when SMTP is wired up. |
+| Pro (v3) column shows "Not available" | advisory (audit H-3, open) | `lightgbm` isn't installed. The startup probe warns, but the dashboard itself has no persistent banner yet. Install `lightgbm` (or accept Lite-only). |
+| Leader Detector rebuild hangs at "Fetching XBRL" | expected | SEC's 10 req/sec cap makes cold rebuilds take ~3.5 hrs. Don't cancel; the fetch is resume-safe (cached rows skip). A single 429 currently drops that ticker (see §7 deviation). |
+| All models predict 0% change | advisory (audit C-9, open) | `predict_ticker` falls back to the previous complete row when today's features contain NaN ([`finance_model_v2.py:507`](finance_model_v2.py:507)). The prediction is stale but does not emit a warning. Check the last 5 rows of the feature DataFrame. |
+| `RandomForestRegressor` hangs on Windows | **guarded** | All five `n_jobs=` call sites in [`finance_model_v2.py`](finance_model_v2.py) are pinned to `n_jobs=1`. The ensemble builders in `build_stacking_ensemble` follow the same rule. If you add a new estimator, keep it `n_jobs=1` — the FastAPI threadpool + joblib interaction is what deadlocks. |
+| SQLite "database is locked" during a rebuild | **guarded** | Round 2 (C-6) enabled WAL + `busy_timeout=30000` on `fundamentals.db`. Readers and the writer coexist. If you see `SQLITE_BUSY`, check whether a new `sqlite3.connect()` call was added without going through `edgar_fetcher.get_db()`. |
+| Batch backtest shows "cached" but results are stale | advisory | TTL on backtest JSONs is 7 days. Force-refresh via `?refresh=true` on `/api/backtest-chart/{symbol}`. |
+| Ticker Lookup verdict card never renders | **guarded** (Round 2 C-1) | The three tabs now read verdicts through `verdict_provider.load_verdict_for_symbol()`. If the card is empty, confirm `screener_results.csv` has a row for that symbol. |
+| Three backtest paths disagree on Sharpe | **guarded** (Round 3 C-3) | All three callers route through `BacktestEngine` with `ensemble_builder='oof'`. Adding a new caller? Use the engine, not a private walk-forward loop. |
 
 ---
 
