@@ -18,6 +18,7 @@ from tests.unit import (
     test_backtest_engine_basic,
     test_api_backtest_wire_format,
     test_http_client,
+    test_edgar_fetcher_http,
 )
 
 
@@ -29,6 +30,7 @@ def main() -> int:
         ("test_backtest_engine_basic", test_backtest_engine_basic),
         ("test_api_backtest_wire_format", test_api_backtest_wire_format),
         ("test_http_client", test_http_client),
+        ("test_edgar_fetcher_http", test_edgar_fetcher_http),
     ):
         print(f"\n=== {name} ===")
         fails = mod.run_all()

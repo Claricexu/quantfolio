@@ -177,13 +177,28 @@ def get_db():
 
 # ─── HTTP ─────────────────────────────────────────────────────────────────────
 
+from http_client import get_json as _http_get_json, TokenBucket
+
+# Module-level token bucket. SEC's public cap is 10 req/s; we run at 8/s with
+# a small burst capacity so bursty retry traffic doesn't cliff-edge the limit.
+# Shared across http_get_json callers (edgar_fetcher + universe_builder).
+SEC_BUCKET = TokenBucket(rate_per_sec=8.0, capacity=4)
+
+
 def http_get_json(url):
-    req = urllib.request.Request(url, headers={
-        "User-Agent": USER_AGENT,
-        "Accept": "application/json",
-    })
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as r:
-        return json.loads(r.read().decode("utf-8"))
+    """Fetch JSON from ``url`` via the shared http_client (Phase 4.1 of C-4).
+
+    Delegates to :func:`http_client.get_json` with :data:`SEC_BUCKET` so every
+    SEC call is paced through the same token bucket and inherits the retry +
+    Retry-After contract. 404s propagate unchanged as :class:`urllib.error.HTTPError`
+    so :func:`fetch_one`'s ticker-not-in-taxonomy branch keeps working.
+    """
+    return _http_get_json(
+        url,
+        headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+        timeout=REQUEST_TIMEOUT,
+        rate_limiter=SEC_BUCKET,
+    )
 
 
 # ─── Ticker → CIK map (cached in memory) ─────────────────────────────────────
@@ -364,8 +379,9 @@ def fetch_one(symbol, conn, force=False):
                         (symbol, accn, form, fp, fy, end, filed)
                     )
 
-    # SIC / sicDescription come from the submissions endpoint (not companyfacts)
-    time.sleep(RATE_LIMIT_SLEEP)  # separate SEC call — stay under rate limit
+    # SIC / sicDescription come from the submissions endpoint (not companyfacts).
+    # Phase 4.1 (C-4): pacing is now handled inside http_get_json via SEC_BUCKET,
+    # so the explicit time.sleep(RATE_LIMIT_SLEEP) that used to live here is gone.
     sic_code, sic_desc = _fetch_submission_meta(cik)
 
     _mark_ticker(conn, symbol, cik, name, 'ok', None,
@@ -386,7 +402,8 @@ def fetch_all(tickers, conn, force=False):
         except Exception as e:
             print(f"  [error] {sym}: {e}")
             results['error'] += 1
-        time.sleep(RATE_LIMIT_SLEEP)
+        # Phase 4.1 (C-4): SEC_BUCKET inside http_get_json handles pacing now;
+        # no explicit sleep needed between tickers.
     return results
 
 
