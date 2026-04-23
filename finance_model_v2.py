@@ -51,6 +51,14 @@ except ImportError:
 
 import yfinance as yf
 
+from http_client import retrying_df_fetch as _retrying_df_fetch, TokenBucket, HttpRetryExhausted
+
+# yfinance has no documented rate limit, but aggressive bursts produce silent
+# 429s (the whole reason for C-5). One batch call = one token; cache covers
+# repeat runs, so this bucket only bites on a cold cache. 2 req/s with a
+# 2-token cushion is conservative and costs nothing when cache is warm.
+YF_BUCKET = TokenBucket(rate_per_sec=2.0, capacity=2)
+
 warnings.filterwarnings('ignore')
 os.environ['PYTHONWARNINGS'] = 'ignore'
 
@@ -60,9 +68,7 @@ os.environ['PYTHONWARNINGS'] = 'ignore'
 DEFAULT_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data_cache')
 CACHE_DIR = os.environ.get("FINANCE_CACHE_DIR", DEFAULT_CACHE_DIR)
 CACHE_DAYS = 1
-FETCH_DELAY_SEC = 1.5
 MAX_RETRIES = 5
-BACKOFF_BASE = 2
 THRESHOLD = 2.5          # Z-score threshold (±2.5 sigma — optimal per sensitivity analysis)
 ZSCORE_LOOKBACK = 126    # ~6 months rolling window for Z-score computation
 RETRAIN_FREQ_V2 = 63     # aligned with Z-score lookback (was 20, caused stale cash positions)
@@ -237,14 +243,14 @@ def _cache_fresh(symbol, cache_dir, max_age_days=CACHE_DAYS):
     except Exception: return False
 
 def _download_batch(syms, start):
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            return yf.download(syms, start=start, interval='1d', auto_adjust=True,
-                               group_by='ticker', progress=False, threads=False)
-        except Exception as e:
-            w = BACKOFF_BASE ** attempt + random.uniform(0, 1)
-            print(f"  [retry {attempt}/{MAX_RETRIES}] {e}. Waiting {w:.1f}s"); time.sleep(w)
-    raise RuntimeError(f"Failed after {MAX_RETRIES} retries.")
+    """Download OHLCV for ``syms`` via yfinance, routed through the shared
+    retrying_df_fetch (C-5 Phase 4.2). Empty DataFrames are now treated as
+    failures rather than silently returned — retrying_df_fetch will retry and,
+    after exhaustion, raise HttpRetryExhausted."""
+    def _fetch():
+        return yf.download(syms, start=start, interval='1d', auto_adjust=True,
+                           group_by='ticker', progress=False, threads=False)
+    return _retrying_df_fetch(_fetch, max_retries=MAX_RETRIES, rate_limiter=YF_BUCKET)
 
 def fetch_stock_data(symbols, start='2010-01-01', cache_dir=None):
     cache_dir = cache_dir or CACHE_DIR; _ensure_cache_dir(cache_dir)
@@ -254,7 +260,8 @@ def fetch_stock_data(symbols, start='2010-01-01', cache_dir=None):
             raw[s] = pd.read_csv(_cache_path(s, cache_dir), index_col=0, parse_dates=True)
         else: to_dl.append(s)
     if to_dl:
-        print(f"Fetching {len(to_dl)} symbols..."); time.sleep(FETCH_DELAY_SEC)
+        # Pacing moved into _download_batch via YF_BUCKET (Phase 4.2 of C-5).
+        print(f"Fetching {len(to_dl)} symbols...")
         batch = _download_batch(to_dl, start)
         for s in to_dl:
             try:
