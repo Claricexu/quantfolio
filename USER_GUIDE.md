@@ -153,7 +153,7 @@ If that ticker was already processed by today's Daily Report, you'll see a small
 - **SVR** (Simple Value Ratio) — Market Cap ÷ Annual Revenue. Shown with a color-coded hint:
   - Green = Undervalued (SVR < 3)
   - Yellow = Fair Value (3 ≤ SVR < 8)
-  - Red = Overvalued (SVR ≥ 8)
+  - Red = Expensive (SVR ≥ 8)
 - **Market Cap** — company size in $M/$B/$T
 - **Quarterly Revenue** — most recent quarter's revenue
 - **Sector / Industry** — for stocks, shows both. For ETFs, shows "ETF" instead.
@@ -192,6 +192,8 @@ The Daily Report auto-scans **all 174 symbols** (100 automated leaders plus your
 - **Automatically** at **4:05 PM EST** on trading days (Monday-Friday), just after US market close
 - **Manually** by clicking the **Refresh** button on the Daily Report tab (typically 25-55 minutes on a laptop; the UI banner shows the same band)
 
+> **Editor's note (2026-04-23):** the 25-55 minute band is a conservative guess, not a measured value — Round 2's attempt to time one end-to-end scan was aborted before completion. Expect real runs to land somewhere inside this band on a modern laptop, but treat the number as a placeholder until a fresh measurement lands.
+
 ### What's on the page
 
 **Summary callout at top**
@@ -210,8 +212,9 @@ The Daily Report auto-scans **all 174 symbols** (100 automated leaders plus your
 
 **Full sortable table**
 - Click any column header to sort (▲ ascending / ▼ descending)
-- Columns: Symbol, Price, Lite %, Pro %, Consensus, Confidence, Best Strategy
+- Columns (10 total): Symbol, Price, Lite Chg, Lite Sig, Pro Chg, Pro Sig, Consensus, Conf, Best Strategy, Firm Score
 - Color-coded signals and confidence badges
+- The Firm Score column shows a small "as of" timestamp chip reflecting when `screener_results.csv` was last regenerated
 
 ### Email alerts (optional)
 
@@ -251,7 +254,7 @@ Click this to process every ticker in your universe. The system is smart about i
 - Lite and Pro run in parallel for each ticker (roughly halves the wall time)
 - Expect ~4-8 minutes per uncached ticker
 
-A progress bar shows which ticker is currently running. The page polls the server every 3-5 seconds, so you can safely refresh the browser or switch tabs — the batch keeps going on the server.
+A progress bar shows which ticker is currently running. The page polls the server every 5 seconds during a batch (the equity-curve chart poll is faster, every 3 seconds), so you can safely refresh the browser or switch tabs — the batch keeps going on the server.
 
 ### Strategy Recommendations (horizontal bar chart)
 
@@ -292,19 +295,19 @@ Quantfolio runs an automated fundamentals screen over the entire SEC-registered 
 
 ### What's on the page
 
-**The table** — 1,414 prescreened symbols (market cap ≥ $1B, price > $3, average daily dollar volume > $1M). Columns:
+**The table** — 1,414 prescreened symbols (market cap ≥ $1B, price > $3, average daily dollar volume > $1M). Columns (in on-screen order):
 
 | Column | What it means |
 |---|---|
-| **Symbol** | Ticker |
-| **Name** | Company name |
-| **Sector** | SIC 2-digit industry code |
-| **Market Cap** | Size (shown as $M / $B / $T) |
-| **Verdict** | LEADER / GEM / WATCH / AVOID (colored badge) |
-| **Score** | Good Firm score (0–100) |
-| **Archetype** | GROWTH or MATURE |
-| **Sector Rank** | Market-cap rank within the SIC-2 group |
-| **Selected** | ✓ if this ticker is in `leaders.csv` (the 100 Quantfolio trades) |
+| **SEL** | ✓ if this ticker is in `leaders.csv` (the 100 Quantfolio trades). A dash (–) means the screener analyzed it but did not pick it. |
+| **SYMBOL** | Ticker |
+| **NAME** | Company name |
+| **SECTOR** | Broad sector bucket (Technology, Health Care, Financials, …) derived from the filing SIC code |
+| **MKT CAP** | Size (shown as $M / $B / $T) |
+| **VERDICT** | LEADER / GEM / WATCH / AVOID (colored badge). Shows an "as of" timestamp chip reflecting when the screener last ran. |
+| **SCORE** | Good Firm score (0–100) |
+| **ARCHETYPE** | GROWTH or MATURE |
+| **SECTOR RANK** | Market-cap rank within the broad-sector group |
 
 Click any column header to sort (▲ / ▼).
 
@@ -347,6 +350,16 @@ Almost never — the pipeline runs automatically every quarter (Feb 15 / May 15 
 - You're debugging the pipeline
 
 **Warning:** a cold rebuild takes ~3.5 hours because SEC EDGAR rate-limits API calls to 10 per second. Warm rebuilds (data already cached) finish in ~10 minutes.
+
+### The confirmation modal
+
+Because a cold rebuild is a multi-hour job, clicking **Rebuild Now** no longer starts the pipeline immediately. Instead, an inline confirmation modal opens and asks you to type the token **REBUILD** (case-insensitive — `rebuild`, `Rebuild`, or `REBUILD` all work) before the **Start rebuild** button activates. The modal shows:
+
+- Estimated duration — **~3.5 hours if cold, ~10 minutes if warm** (the pipeline figures out which one it is from the SEC XBRL cache).
+- When the last rebuild was, so you can see whether you actually need a fresh one.
+- A note that the app is safe to close during the run — the scan continues on the server.
+
+Press **Esc**, click outside the modal, or hit **Cancel** to dismiss without starting anything.
 
 ### What the ✓ in the Selected column tells you
 
