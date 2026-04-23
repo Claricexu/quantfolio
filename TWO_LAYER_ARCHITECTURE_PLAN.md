@@ -49,8 +49,10 @@ Decisions locked with user (2026-04-17):
 │            │                                                                   │
 │            ▼                                                                   │
 │  [1.1] Pure-local filter (reads universe_raw.csv, ZERO HTTP)                  │
-│        liquidity ≥ $5M + filings ≥ 5 10-K & 10 10-Q +                         │
-│        SIC exclusion + top-500 by mcap                → ~500 candidates        │
+│        6 rules: liquidity ≥ $5M + n_10q > 10 + SIC exclusion +                │
+│        blank-SIC reject + SVR ≤ 50 + finance-sector top-50 cap                │
+│                                                        → ~1,414 candidates    │
+│        (no `target_size` cap in the shipped config)                            │
 │            │                                                                   │
 │            ▼                                                                   │
 │  [1.2] SEC XBRL fetch (reuse edgar_fetcher.py)    → fundamentals.db populated │
@@ -112,47 +114,37 @@ Decisions locked with user (2026-04-17):
 
 ### Phase 1.1 — Prescreen (~0.25 day) — *pure-local filter, no HTTP*
 
-**Goal**: trim ~1400 Phase 1.0 survivors down to ~500 tickers that are both practically tradable and framework-compatible. Because Phase 1.0 already captured every field we need, Phase 1.1 is **pure local logic over `universe_raw.csv`** — a single pass, well under 1 minute, re-runnable as many times as we want to retune the thresholds.
+**Goal**: trim the Phase 1.0 survivors down to a framework-compatible set. Because Phase 1.0 already captured every field we need, Phase 1.1 is **pure local logic over `universe_raw.csv`** — a single pass, well under 1 minute, re-runnable as many times as we want to retune the thresholds.
 
-**Three axes of filtering** (all read from `universe_raw.csv`, zero network):
+**Shipped behavior (2026-04-23, as in [`prescreen_rules.json`](prescreen_rules.json)):** six rules, no `target_size` cap. The current run produces **1,414 rows** in `universe_prescreened.csv`, and that same 1,414 flows through to `screener_results.csv` (see [README.md](README.md) file-structure section).
 
-| Axis | Filter | Source field (captured in Phase 1.0) |
+| # | Rule | Source field (captured in Phase 1.0) |
 |---|---|---|
-| A. Liquidity | `avg_dollar_volume_90d` ≥ $5M | Stage 1a: `three_month_average_volume × last_price` |
-| B. Data availability | `n_10k` ≥ 5 AND `n_10q` ≥ 10 | Stage 1c: SEC submissions count |
-| C. Framework applicability | `sic` ∉ excluded ranges | Stage 1c: SEC submissions SIC |
+| 1 | `avg_dollar_volume_90d ≥ $5M` | Stage 1a: `three_month_average_volume × last_price` |
+| 2 | `n_10q > 10` (strict; covers the `≥ 5` 10-K requirement implicitly for mature filers) | Stage 1c: SEC submissions count |
+| 3 | `sic ∉ excluded_sic_ranges` | Stage 1c: SEC submissions SIC |
+| 4 | `sic` not blank | Stage 1c |
+| 5 | `market_cap ÷ annual_revenue ≤ 50` (`max_svr`) — cuts cash shells and pre-revenue biotech outliers | Stage 1a + 1b |
+| 6 | Finance sector (SIC 6000-6999) capped at top 50 by annual revenue; optional dual-class dedup by CIK | Stages 1b + 1c |
 
-After A+B+C, rank surviving rows by `market_cap` and keep the top `target_size` (default 500).
+Rules 5 and 6 are **additions** to the original three-axis spec — they emerged during the 1.1 implementation to kill cash shells and to stop dual-class share pairs (e.g. GOOG/GOOGL) from both consuming slots.
 
-**Excluded SIC sectors** (framework incompatible):
-- Banks: 6020–6030 (commercial banks, savings institutions) — net interest margin, not gross margin
-- REITs: 6798 — FFO/AFFO, not EPS
-- Investment funds / holding shells: 6199, 6722, 6770 — pass-through entities, not operating businesses
+**No `target_size` cap.** The config does not carry a hard top-N; the original "top 500 by market cap after filters" was dropped once the rule set above brought the pass count down to ~1,400 on its own. The README and Layer 2 universe description treat this 1,414-row output as the canonical prescreen size; future retuning should edit `prescreen_rules.json` rather than reintroduce `target_size` without updating both docs.
+
+**Excluded SIC sectors** (framework incompatible, as currently configured):
+- Banks: 6020-6030
+- REITs: 6798
+- Investment funds / holding shells: 6199, 6722, **6726** (added), 6770
 
 **Kept in universe** (user decision — archetype tagging in 1.3 contextualizes the verdict):
-- Insurance: 6300–6411 — float accounting but major carriers (BRK, PGR, CB) are legitimate "leader" candidates
-- Utilities: 4911–4939 — regulated margins but cleanly map to ARISTOCRAT archetype
+- Insurance: 6300-6411 — float accounting but major carriers (BRK, PGR, CB) are legitimate "leader" candidates
+- Utilities: 4911-4939 — regulated margins but cleanly map to ARISTOCRAT archetype
 
-**Config-driven via `prescreen_rules.json`** (created on first run, hand-editable):
-```json
-{
-  "min_avg_dollar_volume_90d": 5000000,
-  "min_10k_count": 5,
-  "min_10q_count": 10,
-  "excluded_sic_ranges": [
-    [6020, 6030], [6798, 6798],
-    [6199, 6199], [6722, 6722], [6770, 6770]
-  ],
-  "target_size": 500
-}
-```
-
-**Implementation** (rewrite of `_apply_rules(rows, rules)` in `universe_builder.py`, currently a top-N stub):
-1. Load `prescreen_rules.json` (create with defaults on first run)
-2. For each row in `universe_raw.csv`: evaluate A (liquidity), B (filings), C (SIC) — all against captured fields
-3. Attach `prescreen_pass_reason` per row (e.g. `"pass"`, `"fail:liquidity"`, `"fail:filings"`, `"fail:sic=6020"`) for debugging / transparency
-4. Sort passing rows by `market_cap` descending, cut to `target_size`
-5. Emit `universe_prescreened.csv` (same schema as `universe_raw.csv` + `prescreen_pass_reason`)
+**Implementation** (in `universe_builder.py`):
+1. Load `prescreen_rules.json` (create with defaults on first run).
+2. For each row in `universe_raw.csv`: evaluate rules 1-6 against captured fields.
+3. Attach `prescreen_pass_reason` per row (`"pass"`, `"fail:liquidity"`, `"fail:filings"`, `"fail:sic=6020"`, `"fail:svr"`, `"fail:finance_cap"`, `"fail:dup_cik"`) for debugging.
+4. Emit `universe_prescreened.csv` (same schema as `universe_raw.csv` + `prescreen_pass_reason`).
 
 **Why this is a big win**: retuning a threshold (e.g. raising liquidity floor to $10M, or un-excluding SIC 6798) triggers only a local CSV re-read — no HTTP, no 2-hour rebuild. Phase 1.0 is the expensive gate; Phase 1.1 is a spreadsheet filter.
 
