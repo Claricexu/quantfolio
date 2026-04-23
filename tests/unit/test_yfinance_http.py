@@ -121,6 +121,40 @@ def test_download_batch_raises_after_exhaustion() -> None:
         f"expected MAX_RETRIES ({finance_model_v2.MAX_RETRIES}) yf.download calls, got {mock_dl.call_count}"
 
 
+def test_fetch_stock_data_propagates_http_retry_exhausted() -> None:
+    """HttpRetryExhausted from _download_batch bubbles out of fetch_stock_data
+    rather than being swallowed — pins the contract that the three callers
+    (predict_ticker, backtest_symbol, backtest_multi_strategy) depend on to
+    surface C-5 failures rather than silently returning {}.
+
+    Patching _download_batch directly (rather than yf.download) keeps this as
+    a strict propagation test: the only thing under test is whether
+    fetch_stock_data lets the exception escape. An empty tempdir for
+    cache_dir ensures _cache_fresh returns False so the fetch is attempted.
+    """
+    import shutil
+    import tempfile
+
+    def _raise(*args, **kwargs):
+        raise http_client.HttpRetryExhausted("test: simulated exhaustion")
+
+    saved = finance_model_v2._download_batch
+    finance_model_v2._download_batch = _raise
+    try:
+        cache_dir = tempfile.mkdtemp()
+        try:
+            raised = False
+            try:
+                finance_model_v2.fetch_stock_data(['FAKE_TEST_SYMBOL_XYZ'], cache_dir=cache_dir)
+            except http_client.HttpRetryExhausted:
+                raised = True
+            assert raised, "fetch_stock_data should have propagated HttpRetryExhausted"
+        finally:
+            shutil.rmtree(cache_dir, ignore_errors=True)
+    finally:
+        finance_model_v2._download_batch = saved
+
+
 # --- runner ------------------------------------------------------------------
 
 def run_all() -> int:
@@ -129,6 +163,7 @@ def run_all() -> int:
         test_download_batch_uses_yf_bucket,
         test_download_batch_retries_on_empty_then_succeeds,
         test_download_batch_raises_after_exhaustion,
+        test_fetch_stock_data_propagates_http_retry_exhausted,
     ):
         try:
             test()

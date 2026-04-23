@@ -268,6 +268,12 @@ def fetch_stock_data(symbols, start='2010-01-01', cache_dir=None):
                 sdf = batch[s].copy() if len(to_dl) > 1 else batch.copy()
                 if isinstance(sdf.columns, pd.MultiIndex): sdf = sdf.droplevel(0, axis=1)
                 sdf.dropna(subset=['Close'], inplace=True)
+                # Partial-batch empty is silent by design: when yf.download returns a
+                # group_by='ticker' frame with some symbols missing per-column data
+                # (typical for delisted/halted tickers in a mixed batch), the top-level
+                # df.empty check in retrying_df_fetch sees other tickers' rows and declares
+                # the batch non-empty. Per-ticker drops flow here. Whole-batch empty (all
+                # symbols missing) is retried inside _download_batch via retrying_df_fetch.
                 if sdf.empty: continue
                 sdf.to_csv(_cache_path(s, cache_dir)); raw[s] = sdf
             except (KeyError, TypeError): print(f"  {s} not found, skipping.")
