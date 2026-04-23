@@ -9,25 +9,30 @@ Browser (Dashboard)          FastAPI Server             Layer 2 — ML Engine
 index.html             <-->  api_server.py       -->    Lite model (RF + XGBoost)
  ├─ Ticker Lookup                                 -->   Pro model (Stacking Ensemble)
  ├─ Daily Report                                         |
- ├─ Strategy Lab                                         Yahoo Finance + Local CSV Cache
- └─ Leader Detector                                      |
-(port 8000)                                              Universe = leaders.csv (100)
+ ├─ Strategy Lab                                         backtest_engine.py
+ └─ Leader Detector                                      (shared walk-forward simulator)
+(port 8000)                                              |
+                                                         Yahoo Finance + Local CSV Cache
+                                                         |
+                                                         Universe = leaders.csv (100)
                                                               ∪ Tickers.csv (85 manual)
                                                          = 174 symbols (deduped)
 
                              Layer 1 — Leader Detector
                              universe_builder.py   -->   universe_raw.csv (2,501)
                                                    -->   universe_prescreened.csv (1,414)
-                             edgar_fetcher.py      -->   fundamentals.db (SEC XBRL)
+                             edgar_fetcher.py      -->   fundamentals.db (SEC XBRL, WAL)
                              fundamental_screener  -->   screener_results.csv (1,414 rows,
                                                               verdict + archetype + score)
+                             verdict_provider.py   -->   unified verdict loader for all tabs
                              leader_selector.py    -->   leaders.csv (100 LEADER ∪ top GEM)
 ```
 
+`backtest_engine.py` is the shared walk-forward simulator behind `predict_ticker`, `backtest_symbol`, and `backtest_multi_strategy` — one `BacktestConfig`, one config-hashed result, same numbers across the CLI, the dashboard, and the Daily Report.
+
 ## Features
 
-- **Ticker Lookup** — Enter any ticker, run Lite or Pro model, or compare both side-by-side with consensus signal
-- **Compare Both** — Run Lite and Pro simultaneously with confidence scoring and best strategy recommendation
+- **Ticker Lookup** — Enter any ticker and get a Lite-vs-Pro side-by-side prediction with consensus signal, SVR valuation, and best backtest strategy.
 - **Daily Report** — Auto-scans 174 symbols (100 automated leaders ∪ 85 manual watchlist, deduped) at market close, generates a sortable report with best strategy per ticker
 - **Strategy Lab** — Batch walk-forward backtesting across all tickers, equity curve charting, and strategy comparison library
 - **Leader Detector** — Browse the 1,414-row prescreened SEC universe with 4-verdict tags (LEADER / GEM / WATCH / AVOID), binary archetype (GROWTH vs MATURE), sector rank, and Good Firm score. Filter by verdict, archetype, or sector; trigger quarterly rebuild; download CSV.
@@ -38,7 +43,7 @@ index.html             <-->  api_server.py       -->    Lite model (RF + XGBoost
 ## Dashboard Tabs
 
 ### Ticker Lookup
-Enter a symbol and click **Predict** (single model) or **Compare Both** (Lite vs Pro). Shows predicted price, percent change, signal (BUY/SELL/HOLD), SVR valuation, model sub-predictions, and best backtest strategy with Sharpe ratio.
+Enter a symbol and click **Predict**. Shows a Lite-vs-Pro side-by-side prediction with predicted price, percent change, signal (BUY/SELL/HOLD), consensus + confidence, SVR valuation, per-model sub-predictions, and best backtest strategy with Sharpe ratio.
 
 ### Daily Report
 Auto-generated at 4:05 PM EST on trading days. Sortable table with columns: Symbol, Price, Change, Lite Signal, Pro Signal, Consensus, Confidence, Best Strategy. Click any column header to sort. Color-coded signals and confidence levels.
@@ -67,6 +72,7 @@ Auto-generated at 4:05 PM EST on trading days. Sortable table with columns: Symb
 - 22 features: adds volume (OBV, Volume Z-score), momentum (ROC), trend strength (ADX, MACD), volatility (ATR, Garman-Klass), mean reversion (Z-score 50d), and lagged signals
 - Inverse-MAE weighted average (weights optimized via 5-fold out-of-fold cross-validation)
 - No prediction clipping — preserves full signal range
+- **Requires `lightgbm`.** If `lightgbm` is not installed, Pro (v3) is unavailable and the relevant API fields (`v3`, `pro_*`) return `null`. The dashboard shows Lite-only output in that case. Install via `pip install -r requirements.txt` to enable Pro.
 
 ### Shared Design
 - **Signal strategy**: Z-score +/-2.5 sigma relative to rolling 126-day prediction history
@@ -234,6 +240,7 @@ Finance/
 │
 ├── Layer 2 — ML Engine ───────────────────────────────────────────────
 ├── finance_model_v2.py          # Core ML engine (Lite + Pro models)
+├── backtest_engine.py           # Shared walk-forward simulator (BacktestEngine)
 ├── finance_model_v4_2pct.py     # Lite vs Pro backtest with sensitivity analysis
 ├── backtest_old_vs_new.py       # Old (GitHub) vs New model comparison
 ├── backtest_buy_hold.py         # Buy-Only vs Full Signal backtest (multi-symbol)
@@ -241,12 +248,17 @@ Finance/
 │
 ├── Layer 1 — Leader Detector ─────────────────────────────────────────
 ├── universe_builder.py          # Phase 1.0 + 1.1: pulls SEC tickers, applies prescreen
-├── edgar_fetcher.py             # Phase 1.2: pulls XBRL facts into fundamentals.db
+├── edgar_fetcher.py             # Phase 1.2: pulls XBRL facts into fundamentals.db (WAL)
 ├── fundamental_metrics.py       # Phase 1.3a: metric computations + archetype classifier
 ├── fundamental_screener.py      # Phase 1.3b: archetype-routed tests, verdict assignment
+├── verdict_provider.py          # Unified verdict loader (single source of truth across tabs)
 ├── leader_selector.py           # Phase 1.4: LEADER ∪ top-GEM -> leaders.csv
-├── prescreen_rules.json         # Prescreen thresholds (market cap, price, volume)
+├── prescreen_rules.json         # 6-rule prescreen config (liquidity, filings, SIC, SVR)
 ├── good_firm_framework.md       # Framework spec (archetypes, tests, verdicts)
+│
+├── tests/
+│   ├── unit/                    # 24 plain-assert unit tests for BacktestEngine
+│   └── backtest_baselines/      # Live-vs-live verify scripts (C-3 regression barrier)
 │
 ├── frontend/
 │   └── index.html               # Dashboard UI (single-page app, 4 tabs)
@@ -255,9 +267,12 @@ Finance/
 ├── screener_results.csv         # Full 1,414-row screener output (feeds Leader Detector tab)
 ├── universe_raw.csv             # Phase 1.0 output (2,501 SEC-registered tickers)
 ├── universe_prescreened.csv     # Phase 1.1 output (1,414 after prescreen)
-├── fundamentals.db              # SQLite XBRL cache (SEC EDGAR facts)
-├── requirements.txt             # Python dependencies
-├── start_dashboard.bat          # One-click Windows launcher
+├── fundamentals.db              # SQLite XBRL cache (SEC EDGAR facts, WAL mode)
+├── requirements.txt             # Python dependencies (pinned)
+├── requirements.lock            # pip freeze capture for reproducibility
+├── .env.example                 # Template for SMTP + SEC credentials
+├── start_dashboard.bat          # One-click Windows launcher (full dep-check on startup)
+├── CHANGELOG.md                 # User-facing release notes
 └── data_cache/                  # Auto-created: CSV cache, scan reports, backtest JSONs
 ```
 
@@ -281,6 +296,8 @@ Finance/
 | GET | `/api/leaders/rebuild/status` | Poll rebuild progress (stage, % complete, last error) |
 
 Strategy parameter: `?strategy=auto` (default), `?strategy=full`, `?strategy=buy_only`
+
+**Model availability:** prediction responses include `v2` (Lite) and `v3` (Pro) fields. `v3` may be `null` when `lightgbm` is not installed — callers should treat `null` as "Pro unavailable, fall back to Lite" rather than an error.
 
 ## Scheduling
 
@@ -314,7 +331,7 @@ Edit `Tickers.csv` or modify `SYMBOL_UNIVERSE` in `finance_model_v2.py`, then re
 | `ModuleNotFoundError` | Run `pip install -r requirements.txt` |
 | Yahoo Finance rate limit | Data is cached locally; delete `data_cache/*.csv` to refresh |
 | Port 8000 in use | Edit `PORT = 8000` in `api_server.py` |
-| No report data | Click Refresh — first scan takes 2-5 min |
+| No report data | Click Refresh — a full scan across 174 symbols typically takes 25-55 min on a laptop (cold; subsequent scans reuse price-cache) |
 | RF predict hangs on Windows | All models use `n_jobs=1` to avoid joblib deadlock |
 | Batch backtest stuck | Check server console for errors; restart server if needed |
 | Best Strategy shows "—" | Run batch backtest in Strategy Lab to generate data |
