@@ -411,13 +411,27 @@ class BacktestEngine:
     # Public entrypoints
     # ------------------------------------------------------------------
 
-    def run(self, strategy_fn: Callable[[Context], Signal]) -> BacktestResult:
-        """Run one strategy against the simulation. Returns a ``BacktestResult``."""
-        return self.run_multi({self.config.strategy_name: strategy_fn})[self.config.strategy_name]
+    def run(
+        self,
+        strategy_fn: Callable[[Context], Signal],
+        progress_cb: Optional[Callable[[int, int], None]] = None,
+    ) -> BacktestResult:
+        """Run one strategy against the simulation. Returns a ``BacktestResult``.
+
+        ``progress_cb`` is an optional callable ``(retrain_num, total_retrains)``
+        invoked at the start of every retrain window in walk-forward mode.
+        It is intentionally NOT part of ``BacktestConfig`` — callbacks aren't
+        JSON-serialisable and would break ``config_hash`` determinism.
+        """
+        return self.run_multi(
+            {self.config.strategy_name: strategy_fn},
+            progress_cb=progress_cb,
+        )[self.config.strategy_name]
 
     def run_multi(
         self,
         strategy_fns: dict[str, Callable[[Context], Signal]],
+        progress_cb: Optional[Callable[[int, int], None]] = None,
     ) -> dict[str, BacktestResult]:
         """Run multiple strategies sharing the same walk-forward model and predictions.
 
@@ -425,6 +439,10 @@ class BacktestEngine:
         dispatches it through every ``strategy_fn`` in ``strategy_fns``. This
         is the ONLY way to guarantee two strategies see identical predictions:
         calling ``run`` twice cannot, because OOF folds re-seed on each retrain.
+
+        ``progress_cb`` mirrors the pre-refactor ``backtest_multi_strategy``
+        progress signalling used by ``api_server._run_backtest_chart`` — fired
+        once per retrain in walk-forward mode, ignored in one-shot mode.
         """
         if not strategy_fns:
             raise ValueError("strategy_fns cannot be empty")
@@ -443,7 +461,7 @@ class BacktestEngine:
             # rows using the trained model.
             return self._run_oneshot(aX, ay, ap, dc, strategy_fns)
         # Walk-forward (backtest_symbol / backtest_multi_strategy replacement).
-        return self._run_walkforward(aX, ay, ap, dc, strategy_fns)
+        return self._run_walkforward(aX, ay, ap, dc, strategy_fns, progress_cb=progress_cb)
 
     # ------------------------------------------------------------------
     # One-shot (predict_ticker path)
@@ -516,6 +534,7 @@ class BacktestEngine:
         ap: np.ndarray,
         dc: pd.DataFrame,
         strategy_fns: dict[str, Callable[[Context], Signal]],
+        progress_cb: Optional[Callable[[int, int], None]] = None,
     ) -> dict[str, BacktestResult]:
         cfg = self.config
         rf_freq = cfg.retrain_freq_days
@@ -534,6 +553,12 @@ class BacktestEngine:
         prices_all: list[float] = []
         raw_preds_all: list[float] = []
 
+        # Progress math — mirror pre-refactor finance_model_v2 L847-848 exactly
+        # so the fraction shown to the frontend is unchanged post-refactor.
+        n_loop = len(aX) - 1 - bsi
+        total_retrains = 1 + max(0, n_loop - 1) // rf_freq
+        retrain_num = 0
+
         model = None
         pf = None
         scaler = StandardScaler()
@@ -542,6 +567,13 @@ class BacktestEngine:
 
         for i in range(bsi, len(aX) - 1):
             if model is None or rc >= rf_freq:
+                retrain_num += 1
+                if progress_cb is not None:
+                    try:
+                        progress_cb(retrain_num, total_retrains)
+                    except Exception:
+                        # Never let a flaky progress callback kill the run.
+                        pass
                 vs = int(i * 0.85)
                 scaler.fit(aX[:vs])
                 Xtr_s = scaler.transform(aX[:vs])

@@ -736,7 +736,12 @@ def daily_scan(symbols=None,cache_dir=None,top_n=10):
 # BACKTEST
 # =============================================================================
 def backtest_symbol(symbol,cache_dir=None,version=None,initial_cash=10000,strategy=None):
-    """Walk-forward backtest with Z-score signal strategy (respects strategy mode)."""
+    """Walk-forward backtest with Z-score signal strategy (respects strategy mode).
+
+    Routed through ``backtest_engine.BacktestEngine`` (C-3 Phase 4a). Preserves
+    the legacy return type (raw numpy portfolio curve) and the two-line console
+    summary. The engine uses ``ensemble_builder='oof'`` to match the
+    pre-refactor baseline for this caller (``build_stacking_ensemble``)."""
     cache_dir=cache_dir or CACHE_DIR; ver=version or MODEL_VERSION
     strat = get_strategy_mode(symbol, strategy)
     raw=fetch_stock_data([symbol],cache_dir=cache_dir)
@@ -747,65 +752,37 @@ def backtest_symbol(symbol,cache_dir=None,version=None,initial_cash=10000,strate
     else:
         df=engineer_features_v2(df); fc=V2_FEATURE_COLS; rf_freq=RETRAIN_FREQ_V2; ver='v2'
     dc=df.dropna(subset=['Target_Return']+fc).copy()
-    # Dynamic backtest start: prefer 2015, but for newer tickers use earliest feasible date
+    # Dynamic backtest start: prefer 2015, but for newer tickers use earliest feasible date.
+    # Pre-refactor guard preserved so the console message is unchanged.
     bm=dc.index>=pd.Timestamp(BACKTEST_PREFERRED_START)
-    bsi=np.argmax(bm) if bm.any() else 0
-    bsi=max(bsi, MIN_TRAIN_DAYS)  # ensure enough training data
+    bsi=int(np.argmax(bm)) if bm.any() else 0
+    bsi=max(bsi, MIN_TRAIN_DAYS)
     if bsi>=len(dc)-MIN_BACKTEST_DAYS:
         print(f"Not enough data for backtest ({len(dc)} rows, need {MIN_TRAIN_DAYS}+{MIN_BACKTEST_DAYS})")
         return None
-    aX=dc[fc].values; ay=dc['Target_Return'].values
+
+    from backtest_engine import BacktestConfig, BacktestEngine, full_signal as _bt_full, buy_only as _bt_buyonly
+    cfg=BacktestConfig(symbol=symbol,strategy_name=strat,initial_cash=float(initial_cash),
+                       threshold=THRESHOLD,zscore_lookback=ZSCORE_LOOKBACK,
+                       min_zscore_samples=MIN_ZSCORE_SAMPLES,retrain_freq_days=int(rf_freq),
+                       min_train_days=MIN_TRAIN_DAYS,seed_from_validation=True,
+                       random_state=42,ensemble_builder='oof',feature_version=ver)
+    _fn=_bt_buyonly if strat=='buy_only' else _bt_full
+    result=BacktestEngine(cfg,dc).run(_fn)
+
+    port=np.array(result.portfolio_curve)
+    # Benchmark: buy-and-hold starting at bsi (the first simulated bar).
     ap=dc['Close'].values.ravel()
-    cash,sh=initial_cash,0.0; port,sigs=[],[]; mdl=None; sc=StandardScaler(); rc=0
-    pred_history=[]  # rolling window of recent predictions for Z-score
+    tp=ap[bsi:bsi+len(port)]
+    bnh=initial_cash*(tp/tp[0]) if len(tp)>0 else np.array([float(initial_cash)])
+    sr=(port[-1]/initial_cash-1)*100 if port.size else 0.0
+    br=(bnh[-1]/initial_cash-1)*100 if bnh.size else 0.0
 
-    for i in range(bsi,len(aX)-1):
-        if mdl is None or rc>=rf_freq:
-            vs=int(i*0.85); sc.fit(aX[:vs])  # fit on TRAIN only — no validation leakage
-            if ver=='v3':
-                mdl=build_stacking_ensemble(sc.transform(aX[:vs]),ay[:vs],sc.transform(aX[vs:i]),ay[vs:i]); pf=predict_v3
-            else:
-                mdl=(train_rf_v2(sc.transform(aX[:vs]),ay[:vs]),train_xgb_v2(sc.transform(aX[:vs]),ay[:vs])); pf=predict_v2
-            # Seed prediction history with validation predictions
-            if not pred_history:
-                seed_preds=pf(mdl,sc.transform(aX[vs:i]))
-                pred_history=list(seed_preds[-ZSCORE_LOOKBACK:])
-            rc=0
-
-        raw_pred=pf(mdl,sc.transform(aX[i:i+1]))[0]
-        pred_history.append(raw_pred)
-        if len(pred_history)>ZSCORE_LOOKBACK: pred_history=pred_history[-ZSCORE_LOOKBACK:]
-
-        # Compute Z-score
-        if len(pred_history)>=MIN_ZSCORE_SAMPLES:
-            hist=np.array(pred_history[:-1])
-            mu,sigma=np.mean(hist),np.std(hist)
-            z=(raw_pred-mu)/sigma if sigma>1e-10 else 0.0
-        else:
-            z=0.0
-
-        pr=float(ap[i])
-        if strat == 'buy_only':
-            # Buy-Only: buy on strong signal, never sell (hold forever)
-            if z>=THRESHOLD and cash>0: sh=cash/pr; cash=0; sigs.append('BUY')
-            else: sigs.append('HOLD')
-        else:
-            # Full Signal: buy and sell on Z-score
-            if z>=THRESHOLD and cash>0: sh=cash/pr; cash=0; sigs.append('BUY')
-            elif z<=-THRESHOLD and sh>0: cash=sh*pr; sh=0; sigs.append('SELL')
-            else: sigs.append('HOLD')
-        port.append(cash+sh*pr); rc+=1
-
-    port=np.array(port); sr=(port[-1]/initial_cash-1)*100
-    tp=ap[bsi:bsi+len(port)]; bnh=initial_cash*(tp/tp[0]); br=(bnh[-1]/initial_cash-1)*100
-    dr=np.diff(port)/port[:-1]; sh_r=float(np.mean(dr)/np.std(dr)*np.sqrt(252)) if np.std(dr)>0 else 0
-    pk=np.maximum.accumulate(port); mdd=float(((port-pk)/pk).min())*100
-    nb,ns=sigs.count('BUY'),sigs.count('SELL')
     vl="Pro" if ver=='v3' else "Lite"
     strat_label="Full Signal" if strat=='full' else "Buy-Only"
     print(f"\n{'='*60}\n  BACKTEST: {symbol} ({vl}, {strat_label}, Z-score ±{THRESHOLD}σ)\n{'='*60}")
-    print(f"  Period: {len(port)} days | Signals: {nb} BUY, {ns} SELL, {sigs.count('HOLD')} HOLD")
-    print(f"  Strategy: {sr:+.1f}% | B&H: {br:+.1f}% | Sharpe: {sh_r:.2f} | MaxDD: {mdd:.1f}%")
+    print(f"  Period: {len(port)} days | Signals: {result.buys} BUY, {result.sells} SELL, {result.holds} HOLD")
+    print(f"  Strategy: {sr:+.1f}% | B&H: {br:+.1f}% | Sharpe: {result.sharpe:.2f} | MaxDD: {result.max_drawdown_pct:.1f}%")
     return port
 
 
