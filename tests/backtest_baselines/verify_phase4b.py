@@ -66,6 +66,30 @@ if REPO_ROOT not in sys.path:
 import finance_model_v2 as fm  # noqa: E402
 from finance_model_v2 import backtest_multi_strategy, backtest_symbol  # noqa: E402
 
+
+# ---------------------------------------------------------------------------
+# Inlined copy of the pre-Phase-5 ``build_stacking_ensemble_fast`` (deleted
+# from finance_model_v2.py in Phase 5 of C-3). The reference loop below uses
+# this local copy so it remains faithful to the OLD walk-forward behaviour
+# it is meant to mirror.
+# ---------------------------------------------------------------------------
+
+def _build_stacking_ensemble_fast(X_train, y_train, X_val, y_val):
+    """Val-MAE-weighted stacking (pre-refactor multi_strategy builder).
+
+    3 model fits per retrain (vs 18 for OOF). Retained as a local reference
+    so Phase 4b's live-vs-live check still mirrors pre-refactor honest
+    behaviour even after the production function was deleted.
+    """
+    fl = fm.train_lgbm_v3(X_train, y_train, X_val, y_val)
+    fx = fm.train_xgb_v3(X_train, y_train, X_val, y_val)
+    fr = fm.train_rf_v3(X_train, y_train)
+    preds = np.column_stack([fl.predict(X_val), fx.predict(X_val), fr.predict(X_val)])
+    mae = np.array([np.mean(np.abs(preds[:, j] - y_val)) for j in range(3)])
+    inv_mae = 1.0 / (mae + 0.005)
+    weights = inv_mae / inv_mae.sum()
+    return {"lgbm": fl, "xgb": fx, "rf": fr, "weights": weights}
+
 BASELINE_DIR = os.path.dirname(os.path.abspath(__file__))
 SHORTHIST_SYMBOL = "SHORTHIST_AAPL"
 REAL_CACHE_DIR = os.path.join(REPO_ROOT, "data_cache")
@@ -147,7 +171,7 @@ def _old_multi_strategy_loop(dc: pd.DataFrame, fcols: list[str], version: str) -
             vs = int(i * 0.85)
             sc.fit(aX[:vs])
             if version == "v3" and fm.HAS_LGBM:
-                mdl = fm.build_stacking_ensemble_fast(
+                mdl = _build_stacking_ensemble_fast(
                     sc.transform(aX[:vs]), ay[:vs],
                     sc.transform(aX[vs:i]), ay[vs:i],
                 )

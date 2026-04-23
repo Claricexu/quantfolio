@@ -121,6 +121,42 @@ def test_run_multi_shares_predictions() -> None:
           f"buy_only={buy_r.num_trades} trades")
 
 
+def test_run_equals_run_multi_single_key() -> None:
+    """engine.run(fn) must equal engine.run_multi({name: fn})[name] byte-for-byte.
+
+    Phase 5 regression guard: ``run`` is defined as a thin delegate to
+    ``run_multi``; this ensures they never fork (e.g. a future optimisation
+    in ``run`` that skips building the multi-strategy scaffolding).
+    """
+    dc = _load_small_ko_frame()
+    cfg = BacktestConfig(
+        symbol="KO",
+        strategy_name="full",
+        retrain_freq_days=63,
+        min_train_days=300,
+        ensemble_builder="oof",
+        feature_version="v3",
+    )
+    engine = BacktestEngine(cfg, dc)
+    single = engine.run(full_signal)
+    multi = engine.run_multi({"full": full_signal})["full"]
+
+    # portfolio_curve is the critical series — a walk-forward fork would
+    # show up here first.
+    assert single.portfolio_curve == multi.portfolio_curve, \
+        "run() and run_multi() produced different portfolio_curves"
+    assert single.raw_predictions == multi.raw_predictions
+    assert single.z_scores == multi.z_scores
+    assert single.signals == multi.signals
+    assert single.dates == multi.dates
+    assert single.final_portfolio_value == multi.final_portfolio_value
+    assert single.sharpe == multi.sharpe
+    assert single.max_drawdown_pct == multi.max_drawdown_pct
+    assert single.config_hash == multi.config_hash
+    print(f"  [basic] run == run_multi equivalence OK ({single.period_days}d, "
+          f"final=${single.final_portfolio_value:.2f})")
+
+
 def test_n_jobs_one_on_fitted_estimators() -> None:
     """Every base estimator in the fitted V3 ensemble must have n_jobs==1.
     Wright note #5: regression guard against accidental override."""
@@ -161,6 +197,7 @@ def run_all() -> int:
     for test in (
         test_run_single_strategy,
         test_run_multi_shares_predictions,
+        test_run_equals_run_multi_single_key,
         test_n_jobs_one_on_fitted_estimators,
     ):
         try:

@@ -150,16 +150,43 @@ from finance_model_v2 import (  # noqa: E402
     backtest_multi_strategy,
     backtest_symbol,
     build_stacking_ensemble,
-    build_stacking_ensemble_fast,
     engineer_features_v2,
     engineer_features_v3,
     fetch_stock_data,
     predict_ticker,
     predict_v2,
     predict_v3,
+    train_lgbm_v3,
     train_rf_v2,
+    train_rf_v3,
     train_xgb_v2,
+    train_xgb_v3,
 )
+
+
+# ---------------------------------------------------------------------------
+# Inlined copy of the pre-Phase-5 ``build_stacking_ensemble_fast`` (deleted
+# from finance_model_v2.py in Phase 5 of C-3). Retained here locally so the
+# historical baseline captures remain faithful to the exact pre-refactor
+# behaviour — this file is a reference mirror, not production code.
+# ---------------------------------------------------------------------------
+
+def build_stacking_ensemble_fast(X_train, y_train, X_val, y_val):
+    """Val-MAE-weighted stacking ensemble (pre-refactor multi_strategy builder).
+
+    Inlined copy of the original finance_model_v2.build_stacking_ensemble_fast.
+    Skips 5-fold OOF and uses val-set MAE for weights. ~6x faster than the OOF
+    builder (3 model fits per retrain instead of 18). Kept here solely so the
+    historical reference capture path matches the exact pre-Phase-5 behaviour.
+    """
+    fl = train_lgbm_v3(X_train, y_train, X_val, y_val)
+    fx = train_xgb_v3(X_train, y_train, X_val, y_val)
+    fr = train_rf_v3(X_train, y_train)
+    preds = np.column_stack([fl.predict(X_val), fx.predict(X_val), fr.predict(X_val)])
+    mae = np.array([np.mean(np.abs(preds[:, j] - y_val)) for j in range(3)])
+    inv_mae = 1.0 / (mae + 0.005)  # 0.005 prevents extreme weight imbalance
+    weights = inv_mae / inv_mae.sum()
+    return {"lgbm": fl, "xgb": fx, "rf": fr, "weights": weights}
 import pandas as pd  # noqa: E402  (imported after fm so finance_model_v2's warnings filter wins)
 
 

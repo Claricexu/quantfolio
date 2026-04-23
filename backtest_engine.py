@@ -30,16 +30,16 @@ Design commitments (enforced here)
   callback sees ``z_score``. No code path can bypass the guard. Built-in
   strategies also honor ``ctx.samples_ready`` and return HOLD when False.
 
-OOF vs fast ensemble
---------------------
-The engine defaults to ``ensemble_builder='oof'`` (``build_stacking_ensemble``)
-to match the user-facing prediction path (``/api/predict``, ``/api/report``).
-Today, ``backtest_multi_strategy`` is the one outlier using the val-MAE-weighted
-fast builder; after Phase 4 lands it will be pulled into line with the OOF
-default. One observed consequence: MSFT's ``backtest_multi_strategy`` final
-portfolio shifts from $87,367.59 to $92,159.04 (matching the ``backtest_symbol``
-baseline). This is a bug-fix (inconsistent builder selection across paths),
-documented as a known-good change in ``round3-summary.md`` deferred to Phase 5.
+Ensemble builder
+----------------
+The engine only supports ``ensemble_builder='oof'`` (``build_stacking_ensemble``),
+matching the user-facing prediction path (``/api/predict``, ``/api/report``).
+The pre-refactor ``backtest_multi_strategy`` used a val-MAE-weighted "fast"
+builder; Phase 5 of C-3 pulled it into line with OOF, which fixed a known
+MSFT divergence ($87,367.59 -> $92,159.04 in the Phase 1 snapshot). The
+``build_stacking_ensemble_fast`` function was deleted in Phase 5; the
+``ensemble_builder`` config field is retained as a free-form str for future
+builders.
 
 Short-history tickers (see Phase 1 SHORTHIST_AAPL baseline) are a related
 known-good change: ``predict_ticker``'s inline loop previously used an adaptive
@@ -60,10 +60,11 @@ Public API
 Speed note (goes in docstring per design Section 6)
 ---------------------------------------------------
 The OOF builder runs ~18 model fits per retrain (3 base models x 5 OOF folds
-+ 3 refit on full train) vs the fast builder's ~3 fits (val-MAE-weighted
-stacking). On a 10-year backtest with retrain_freq_days=63, that is ~44
-retrains, so the engine spends ~800 fits (OOF) vs ~130 fits (fast).
-Wall-clock delta ~3-4x. For CLI and async ``/api/backtest``, tolerable.
++ 3 refit on full train). On a 10-year backtest with retrain_freq_days=63,
+that is ~44 retrains, so the engine spends ~800 fits. For CLI and async
+``/api/backtest`` this is tolerable; the pre-refactor multi_strategy path
+ran a ~3x faster val-MAE builder (now deleted) — the cost of this change is
+accepted as the price of eliminating path-divergent stacking.
 """
 from __future__ import annotations
 
@@ -82,7 +83,6 @@ from sklearn.preprocessing import StandardScaler
 # module remains unchanged and importable as today.
 from finance_model_v2 import (  # noqa: E402
     build_stacking_ensemble,
-    build_stacking_ensemble_fast,
     predict_v3,
     predict_v2,
     train_rf_v2,
@@ -91,6 +91,7 @@ from finance_model_v2 import (  # noqa: E402
     ZSCORE_LOOKBACK,
     MIN_ZSCORE_SAMPLES,
     MIN_TRAIN_DAYS,
+    MIN_BACKTEST_DAYS,
     V2_FEATURE_COLS,
     V3_FEATURE_COLS,
     HAS_LGBM,
@@ -98,7 +99,10 @@ from finance_model_v2 import (  # noqa: E402
 
 # Type aliases
 Signal = Literal["BUY", "SELL", "HOLD"]
-EnsembleKind = Literal["oof", "fast"]
+# ``ensemble_builder`` is a free-form str (not a Literal) so future builders can
+# be added without another enum expansion. Today only "oof" is wired in
+# ``_build_model``; anything else raises ValueError. The old "fast" (val-MAE)
+# builder was deleted in Phase 5 of C-3 — see docstring top of file.
 FeatureVersion = Literal["v2", "v3"]
 
 
@@ -124,12 +128,18 @@ class BacktestConfig:
     min_zscore_samples: int = MIN_ZSCORE_SAMPLES
     retrain_freq_days: Optional[int] = None   # None = one-shot (predict_ticker style)
     min_train_days: int = MIN_TRAIN_DAYS
+    # Walk-forward only: minimum number of simulation rows past ``bsi`` needed
+    # to be considered a meaningful backtest. Pre-refactor this check lived in
+    # the ``backtest_symbol`` / ``backtest_multi_strategy`` wrappers; hoisted
+    # into the engine in Phase 5 of C-3 so direct engine callers can't bypass.
+    # Ignored in one-shot mode (``retrain_freq_days is None``).
+    min_backtest_days: int = MIN_BACKTEST_DAYS
     # Seeds pred_history with the tail of the validation-window predictions
     # (i.e. ``yp[-zscore_lookback:]``). This matches the current code paths
     # in finance_model_v2 L774-L776 / L868-L870 / L482.
     seed_from_validation: bool = True
     random_state: int = 42
-    ensemble_builder: EnsembleKind = "oof"
+    ensemble_builder: str = "oof"   # only "oof" is wired today; see note at top of module
     feature_version: FeatureVersion = "v3"
 
     # ------- derived helpers -------
@@ -544,9 +554,14 @@ class BacktestEngine:
         bm = dc.index >= pd.Timestamp("2015-01-02")
         bsi = int(np.argmax(bm)) if bm.any() else 0
         bsi = max(bsi, cfg.min_train_days)
-        if bsi >= len(aX) - 1:
+        # MIN_BACKTEST_DAYS guard (hoisted from the pre-refactor wrappers in
+        # Phase 5 of C-3). Requires ``min_backtest_days`` simulation rows past
+        # bsi — stricter than the loose ``bsi >= len(aX)-1`` check it replaces.
+        if bsi >= len(aX) - cfg.min_backtest_days:
             raise ValueError(
-                f"insufficient data: start index {bsi} >= end {len(aX)-1}"
+                f"insufficient data for walk-forward backtest: "
+                f"{len(aX)} feature rows, start index {bsi}, "
+                f"need at least {cfg.min_train_days}+{cfg.min_backtest_days}"
             )
 
         dates_all: list[str] = []
@@ -720,15 +735,21 @@ class BacktestEngine:
     def _build_model(self, Xtr_s: np.ndarray, ytr: np.ndarray, Xvl_s: np.ndarray, yvl: np.ndarray):
         """Dispatch to the configured ensemble builder.
 
-        Engine does NOT own the builders — they remain in finance_model_v2.py
-        for Phase 2 (Phase 5 cleanup may relocate). See Wright note #5.
+        Engine does NOT own the builders — they remain in finance_model_v2.py.
+        Phase 5 of C-3 removed the val-MAE ``"fast"`` builder; only ``"oof"``
+        is recognised on the v3 path. Unknown values raise ``ValueError`` so
+        typos fail loud instead of silently falling through.
         """
         cfg = self.config
         if cfg.feature_version == "v3" and HAS_LGBM:
-            if cfg.ensemble_builder == "fast":
-                return build_stacking_ensemble_fast(Xtr_s, ytr, Xvl_s, yvl), predict_v3
+            if cfg.ensemble_builder != "oof":
+                raise ValueError(
+                    f"unknown ensemble_builder={cfg.ensemble_builder!r}; "
+                    "only 'oof' is supported (Phase 5 of C-3 removed 'fast')"
+                )
             return build_stacking_ensemble(Xtr_s, ytr, Xvl_s, yvl), predict_v3
-        # v2 fallback: the "builder" is just (RF, XGB).
+        # v2 fallback: the "builder" is just (RF, XGB). ensemble_builder is
+        # ignored on the v2 path (there's no stacking there).
         Xall = np.vstack([Xtr_s, Xvl_s])
         yall = np.concatenate([ytr, yvl])
         model = (train_rf_v2(Xall, yall), train_xgb_v2(Xall, yall))

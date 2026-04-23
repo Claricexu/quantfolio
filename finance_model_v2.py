@@ -426,17 +426,6 @@ def build_stacking_ensemble(X_train,y_train,X_val,y_val):
     fr=train_rf_v3(X_train,y_train)
     return {'lgbm':fl,'xgb':fx,'rf':fr,'weights':weights}
 
-def build_stacking_ensemble_fast(X_train,y_train,X_val,y_val):
-    """Fast version for backtest charts — skips 5-fold OOF, uses val-set MAE for weights.
-    ~6x faster: 3 model fits per retrain instead of 18."""
-    fl=train_lgbm_v3(X_train,y_train,X_val,y_val)
-    fx=train_xgb_v3(X_train,y_train,X_val,y_val)
-    fr=train_rf_v3(X_train,y_train)
-    preds=np.column_stack([fl.predict(X_val),fx.predict(X_val),fr.predict(X_val)])
-    mae=np.array([np.mean(np.abs(preds[:,j]-y_val)) for j in range(3)])
-    inv_mae=1.0/(mae+0.005); weights=inv_mae/inv_mae.sum()  # 0.005 prevents extreme weight imbalance
-    return {'lgbm':fl,'xgb':fx,'rf':fr,'weights':weights}
-
 def predict_v3(ens,X):
     """Weighted average prediction — no clipping, preserves full signal range."""
     w=ens['weights']
@@ -752,23 +741,27 @@ def backtest_symbol(symbol,cache_dir=None,version=None,initial_cash=10000,strate
     else:
         df=engineer_features_v2(df); fc=V2_FEATURE_COLS; rf_freq=RETRAIN_FREQ_V2; ver='v2'
     dc=df.dropna(subset=['Target_Return']+fc).copy()
-    # Dynamic backtest start: prefer 2015, but for newer tickers use earliest feasible date.
-    # Pre-refactor guard preserved so the console message is unchanged.
+    # MIN_BACKTEST_DAYS guard lives in the engine (Phase 5 of C-3). We still
+    # compute ``bsi`` here because the benchmark buy-and-hold slice below
+    # needs it — but the insufficient-data decision belongs to the engine.
     bm=dc.index>=pd.Timestamp(BACKTEST_PREFERRED_START)
     bsi=int(np.argmax(bm)) if bm.any() else 0
     bsi=max(bsi, MIN_TRAIN_DAYS)
-    if bsi>=len(dc)-MIN_BACKTEST_DAYS:
-        print(f"Not enough data for backtest ({len(dc)} rows, need {MIN_TRAIN_DAYS}+{MIN_BACKTEST_DAYS})")
-        return None
 
     from backtest_engine import BacktestConfig, BacktestEngine, full_signal as _bt_full, buy_only as _bt_buyonly
     cfg=BacktestConfig(symbol=symbol,strategy_name=strat,initial_cash=float(initial_cash),
                        threshold=THRESHOLD,zscore_lookback=ZSCORE_LOOKBACK,
                        min_zscore_samples=MIN_ZSCORE_SAMPLES,retrain_freq_days=int(rf_freq),
-                       min_train_days=MIN_TRAIN_DAYS,seed_from_validation=True,
-                       random_state=42,ensemble_builder='oof',feature_version=ver)
+                       min_train_days=MIN_TRAIN_DAYS,min_backtest_days=MIN_BACKTEST_DAYS,
+                       seed_from_validation=True,random_state=42,
+                       ensemble_builder='oof',feature_version=ver)
     _fn=_bt_buyonly if strat=='buy_only' else _bt_full
-    result=BacktestEngine(cfg,dc).run(_fn)
+    try:
+        result=BacktestEngine(cfg,dc).run(_fn)
+    except ValueError as exc:
+        # Legacy contract: insufficient data -> None + console message.
+        print(f"Not enough data for backtest ({len(dc)} rows, need {MIN_TRAIN_DAYS}+{MIN_BACKTEST_DAYS}) [{exc}]")
+        return None
 
     port=np.array(result.portfolio_curve)
     # Benchmark: buy-and-hold starting at bsi (the first simulated bar).
@@ -802,12 +795,12 @@ def backtest_multi_strategy(symbol, cache_dir=None, version=None, initial_cash=1
     for the regression guard.
 
     Ensemble-builder change (intentional, C-3 bug fix): pre-refactor this
-    function used ``build_stacking_ensemble_fast`` (val-MAE) while
-    ``backtest_symbol`` used ``build_stacking_ensemble`` (OOF). Now both paths
-    use OOF via the engine default. On MSFT this shifts multi_strategy[full]
-    from $87,367.59 -> $92,159.04, now matching backtest_symbol. All other
-    tickers agree within 1e-4 between the two ensemble choices and remain
-    unchanged.
+    function used a val-MAE-weighted "fast" builder (``build_stacking_ensemble_fast``,
+    deleted in Phase 5) while ``backtest_symbol`` used ``build_stacking_ensemble``
+    (OOF). Now both paths use OOF via the engine default. On MSFT this shifts
+    multi_strategy[full] from $87,367.59 -> $92,159.04, now matching
+    backtest_symbol. All other tickers agree within 1e-4 between the two
+    ensemble choices and remain unchanged.
     """
     cache_dir = cache_dir or CACHE_DIR
     ver = version or MODEL_VERSION
@@ -820,25 +813,29 @@ def backtest_multi_strategy(symbol, cache_dir=None, version=None, initial_cash=1
     else:
         df = engineer_features_v2(df); fc = V2_FEATURE_COLS; rf_freq = RETRAIN_FREQ_V2; ver = 'v2'
     dc = df.dropna(subset=['Target_Return'] + fc).copy()
-    # Dynamic backtest start: prefer 2015, but for newer tickers use earliest feasible date.
-    # Pre-refactor guard preserved so the console message is unchanged.
+    # MIN_BACKTEST_DAYS guard lives in the engine (Phase 5 of C-3). We still
+    # compute ``bsi`` here for the buy-and-hold benchmark slice below; the
+    # insufficient-data decision belongs to the engine.
     bm = dc.index >= pd.Timestamp(BACKTEST_PREFERRED_START)
     bsi = int(np.argmax(bm)) if bm.any() else 0
     bsi = max(bsi, MIN_TRAIN_DAYS)
-    if bsi >= len(dc) - MIN_BACKTEST_DAYS:
-        print(f"  [{symbol}] Not enough data for backtest ({len(dc)} rows, need {MIN_TRAIN_DAYS}+{MIN_BACKTEST_DAYS})")
-        return None
 
     from backtest_engine import BacktestConfig, BacktestEngine, full_signal as _bt_full, buy_only as _bt_buyonly
     cfg = BacktestConfig(symbol=symbol, strategy_name='full', initial_cash=float(initial_cash),
                          threshold=THRESHOLD, zscore_lookback=ZSCORE_LOOKBACK,
                          min_zscore_samples=MIN_ZSCORE_SAMPLES, retrain_freq_days=int(rf_freq),
-                         min_train_days=MIN_TRAIN_DAYS, seed_from_validation=True,
-                         random_state=42, ensemble_builder='oof', feature_version=ver)
-    results = BacktestEngine(cfg, dc).run_multi(
-        {'full': _bt_full, 'buy_only': _bt_buyonly},
-        progress_cb=progress_cb,
-    )
+                         min_train_days=MIN_TRAIN_DAYS, min_backtest_days=MIN_BACKTEST_DAYS,
+                         seed_from_validation=True, random_state=42,
+                         ensemble_builder='oof', feature_version=ver)
+    try:
+        results = BacktestEngine(cfg, dc).run_multi(
+            {'full': _bt_full, 'buy_only': _bt_buyonly},
+            progress_cb=progress_cb,
+        )
+    except ValueError as exc:
+        # Legacy contract: insufficient data -> None + console message.
+        print(f"  [{symbol}] Not enough data for backtest ({len(dc)} rows, need {MIN_TRAIN_DAYS}+{MIN_BACKTEST_DAYS}) [{exc}]")
+        return None
     f_res = results['full']
     b_res = results['buy_only']
 
@@ -849,17 +846,36 @@ def backtest_multi_strategy(symbol, cache_dir=None, version=None, initial_cash=1
     tp = ap[bsi:bsi + len(f_port)]
     bnh = initial_cash * (tp / tp[0]) if len(tp) > 0 else np.array([float(initial_cash)])
 
-    def _stats_from_port(port, buys, sells):
+    def _engine_stats(port, res):
+        """Wire-format stats from a BacktestResult. Reuses the engine's own
+        sharpe/max_drawdown_pct (no recomputation); only return_pct is
+        wire-specific because it's relative to ``initial_cash`` which the
+        engine doesn't mirror back.
+        """
         if port.size == 0:
             return {'return_pct': 0.0, 'sharpe': 0.0, 'max_drawdown': 0.0,
-                    'buys': buys, 'sells': sells}
+                    'buys': res.buys, 'sells': res.sells}
+        return_pct = (port[-1] / initial_cash - 1) * 100
+        return {'return_pct': round(return_pct, 1),
+                'sharpe': round(res.sharpe, 2),
+                'max_drawdown': round(res.max_drawdown_pct, 1),
+                'buys': res.buys, 'sells': res.sells}
+
+    def _buyhold_stats(port):
+        """Stats for the buy-and-hold benchmark. The engine doesn't produce a
+        ``BacktestResult`` for buyhold (it's a pure price series, not a
+        strategy run), so recompute here. Matches the old contract.
+        """
+        if port.size == 0:
+            return {'return_pct': 0.0, 'sharpe': 0.0, 'max_drawdown': 0.0,
+                    'buys': 0, 'sells': 0}
         ret = (port[-1] / initial_cash - 1) * 100
         dr = np.diff(port) / port[:-1]
         sharpe = float(np.mean(dr) / np.std(dr) * np.sqrt(252)) if dr.size and np.std(dr) > 0 else 0.0
         pk = np.maximum.accumulate(port)
-        mdd = float(((port - pk) / pk).min()) * 100 if port.size else 0.0
+        mdd = float(((port - pk) / pk).min()) * 100
         return {'return_pct': round(ret, 1), 'sharpe': round(sharpe, 2),
-                'max_drawdown': round(mdd, 1), 'buys': buys, 'sells': sells}
+                'max_drawdown': round(mdd, 1), 'buys': 0, 'sells': 0}
 
     ver_label = "Pro" if ver == 'v3' else "Lite"
     start_date = dates_out[0] if dates_out else None
@@ -869,10 +885,10 @@ def backtest_multi_strategy(symbol, cache_dir=None, version=None, initial_cash=1
         'period_days': len(f_port), 'start_date': start_date, 'dates': dates_out,
         'buyhold': [round(v, 2) for v in bnh.tolist()],
         'full': {'portfolio': [round(v, 2) for v in f_port.tolist()],
-                 **_stats_from_port(f_port, f_res.buys, f_res.sells)},
+                 **_engine_stats(f_port, f_res)},
         'buy_only': {'portfolio': [round(v, 2) for v in b_port.tolist()],
-                     **_stats_from_port(b_port, b_res.buys, b_res.sells)},
-        'buyhold_stats': _stats_from_port(np.asarray(bnh, dtype=float), 0, 0),
+                     **_engine_stats(b_port, b_res)},
+        'buyhold_stats': _buyhold_stats(np.asarray(bnh, dtype=float)),
     }
 
 
