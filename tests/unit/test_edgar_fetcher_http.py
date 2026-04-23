@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import sqlite3
 import sys
 import urllib.error
 from unittest.mock import patch
@@ -163,6 +164,54 @@ def test_http_get_json_propagates_404() -> None:
         f"404 must not retry — got {call_count['n']} urlopen calls"
 
 
+def test_fetch_one_returns_error_on_http_retry_exhausted() -> None:
+    """When every HTTP attempt 500s, http_client.get_json exhausts its retries
+    and raises HttpRetryExhausted. fetch_one's bare ``except Exception`` at
+    edgar_fetcher.py:300-302 must catch this and return ``'error'`` — NOT
+    propagate the exception. This pins the one new exception type the Phase
+    4.1 wrapper can raise that the pre-refactor caller didn't see.
+
+    Pre-populates ``_ticker_cik_map`` so load_ticker_cik_map is a no-op; the
+    FIRST urlopen call is the companyfacts URL at edgar_fetcher.py:288, which
+    is the one that should fail. Asserts urlopen was called exactly
+    ``max_retries`` (5) times — that's the full retry budget of
+    http_client.get_json, confirming the exception surfaced through the
+    wrapper rather than being swallowed earlier."""
+    # Minimal in-memory DB with the edgar_fetcher schema so _mark_ticker
+    # and is_fresh can run against a real connection.
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(edgar_fetcher.SCHEMA)
+
+    call_count = {"n": 0}
+
+    def side_effect(req, timeout):
+        call_count["n"] += 1
+        raise _http_error(500)
+
+    saved_map = edgar_fetcher._ticker_cik_map
+    try:
+        # Skip the network call inside load_ticker_cik_map.
+        edgar_fetcher._ticker_cik_map = {
+            'FAKE': {'cik': 1234, 'name': 'Fake Corp'}
+        }
+        sleeps: list[float] = []
+        with patch.object(edgar_fetcher, "SEC_BUCKET", _RecordingBucket()), \
+                patch("http_client.urllib.request.urlopen", side_effect=side_effect), \
+                patch("http_client.time.sleep", side_effect=_silence_sleep(sleeps)):
+            result = edgar_fetcher.fetch_one('FAKE', conn)
+    finally:
+        edgar_fetcher._ticker_cik_map = saved_map
+        conn.close()
+
+    assert result == 'error', \
+        f"fetch_one should catch HttpRetryExhausted and return 'error', got {result!r}"
+    # http_client.get_json default is max_retries=5 — so 5 urlopen attempts
+    # (not 6; the loop is ``for attempt in range(1, max_retries+1)``).
+    assert call_count["n"] == 5, \
+        f"expected 5 urlopen calls (max_retries=5), got {call_count['n']}"
+
+
 # --- runner ------------------------------------------------------------------
 
 def run_all() -> int:
@@ -171,6 +220,7 @@ def run_all() -> int:
         test_http_get_json_uses_token_bucket,
         test_http_get_json_retries_on_429,
         test_http_get_json_propagates_404,
+        test_fetch_one_returns_error_on_http_retry_exhausted,
     ):
         try:
             test()

@@ -179,10 +179,11 @@ def get_db():
 
 from http_client import get_json as _http_get_json, TokenBucket
 
-# Module-level token bucket. SEC's public cap is 10 req/s; we run at 8/s with
-# a small burst capacity so bursty retry traffic doesn't cliff-edge the limit.
-# Shared across http_get_json callers (edgar_fetcher + universe_builder).
-SEC_BUCKET = TokenBucket(rate_per_sec=8.0, capacity=4)
+# Module-level token bucket. SEC's public cap is 10 req/s; we run at 8/s.
+# capacity=2 gives a small cushion so a retry landing next to a real call
+# doesn't stall, without amplifying future concurrency — a 2-token burst
+# from a cold bucket lands at ~10/s worst-case, still under the ceiling.
+SEC_BUCKET = TokenBucket(rate_per_sec=8.0, capacity=2)
 
 
 def http_get_json(url):
