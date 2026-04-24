@@ -6,6 +6,16 @@ The changelog is organized by release round. Each round closed a batch of audit 
 
 ---
 
+## Round 4 — 2026-04-23
+
+A reliability pass for the two external data feeds (Yahoo Finance and SEC EDGAR).
+
+### Changed
+
+- **Data fetches now retry on rate limits instead of silently dropping tickers.** On a flaky Yahoo or SEC day, tickers used to vanish from the Daily Report with no explanation — the underlying request got throttled and the app moved on. Both feeds now retry with exponential backoff (and, for SEC, honor the server's `Retry-After` hint when present), and only give up after several attempts. When a batch really does exhaust its retry budget, it now raises a visible error instead of quietly returning nothing — so a real upstream outage looks different from a clean "no hits today."
+
+---
+
 ## Round 3 — 2026-04-23
 
 One focused refactor: same backtest path for everyone.

@@ -407,8 +407,6 @@ def _fetch_sec_submission_ext(cik):
         sub_10k, sub_10q = _count_10k_10q(sub_forms)
         n_10k += sub_10k
         n_10q += sub_10q
-        # Rate-limit between paginated fetches too (SEC 10 req/s cap applies).
-        time.sleep(SEC_RATE_LIMIT_SLEEP)
 
     return (sic, sic_desc, n_10k, n_10q)
 
@@ -501,8 +499,6 @@ def _apply_sec_pass(candidates, resume=True, refresh_sec=False):
             eta_s = (len(pending) - i) / max(0.01, rate)
             print(f"[1.0] sec    {i:>5}/{len(pending)}  rate={rate:.1f}/s  "
                   f"ETA={int(eta_s/60)}m  last={row['symbol']}")
-
-        time.sleep(SEC_RATE_LIMIT_SLEEP)
 
     # Attach sec fields to every candidate (even those already cached)
     missing = 0

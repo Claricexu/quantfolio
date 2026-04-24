@@ -1170,7 +1170,7 @@ def _edgar_refresh_worker(symbols):
     try:
         conn = _edgar_get_db()
         results = {'ok': 0, 'skipped': 0, 'not_found': 0, 'no_facts': 0, 'error': 0}
-        from edgar_fetcher import fetch_one as _fetch_one, RATE_LIMIT_SLEEP
+        from edgar_fetcher import fetch_one as _fetch_one
         for sym in symbols:
             with _edgar_lock:
                 _edgar_state["current_symbol"] = sym
@@ -1182,7 +1182,6 @@ def _edgar_refresh_worker(symbols):
                 results['error'] += 1
             with _edgar_lock:
                 _edgar_state["completed"] += 1
-            time.sleep(RATE_LIMIT_SLEEP)
         conn.close()
         with _edgar_lock:
             _edgar_state["results"] = results
