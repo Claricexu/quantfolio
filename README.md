@@ -299,6 +299,8 @@ Strategy parameter: `?strategy=auto` (default), `?strategy=full`, `?strategy=buy
 
 **Model availability:** prediction responses include `v2` (Lite) and `v3` (Pro) fields. `v3` may be `null` when `lightgbm` is not installed — callers should treat `null` as "Pro unavailable, fall back to Lite" rather than an error.
 
+**Prediction warnings:** prediction responses include a `warnings` array; `stale_features_used` indicates today's feature row had NaN values and yesterday's features were used as fallback. Compare-card responses also mirror these as `v2_warnings` / `v3_warnings` at the top level.
+
 ## Scheduling
 
 When APScheduler is installed, the server automatically runs the dual-model report at **4:05 PM EST, Monday-Friday** (just after market close). Results are cached and served via `/api/report`.

@@ -515,9 +515,15 @@ def predict_ticker(symbol,cache_dir=None,verbose=True,version=None,strategy=None
     else:
         bnh_sh=0; bnh_dd=0
 
-    # Predict next day
+    # Predict next day. C-9: when today's feature row has NaN (e.g. ROC_60d on
+    # a young IPO, a missing Volume day), fall back to the most recent complete
+    # row AND attach a "stale_features_used" warning so callers can surface the
+    # degradation instead of silently emitting a confident-looking prediction.
     lf=latest_row[fcols].values
-    if np.isnan(lf).any(): lf=aX[-1:].copy()
+    warnings=[]
+    if np.isnan(lf).any():
+        lf=aX[-1:].copy()
+        warnings.append("stale_features_used")
     ls=scaler.transform(lf.reshape(1,-1))
     rp=pf(model,ls)[0]
     cp_price=float(df['Close'].iloc[-1]); pp=cp_price*(1+rp)
@@ -571,6 +577,7 @@ def predict_ticker(symbol,cache_dir=None,verbose=True,version=None,strategy=None
             "backtest_mae":round(float(mae_r)*cp_price,2),"backtest_rmse":round(float(rmse_r)*cp_price,2),
             "data_points":len(dc),"train_window":te,"train_window_setting":"All data",
             "last_date":str(df.index[-1].date()),
+            "warnings":warnings,
             "backtest":{"strategy_return":round(bt_ret,2),"buyhold_return":round(bnh_ret,2),
                         "sharpe":round(bt_sh,2),"max_drawdown":round(bt_dd,1),
                         "bnh_sharpe":round(bnh_sh,2),"bnh_max_drawdown":round(bnh_dd,1),
@@ -629,6 +636,11 @@ def predict_ticker_compare(symbol, cache_dir=None, verbose=False, strategy=None)
         'strategy_label': strat_label,
         'v2': r_v2 if 'error' not in r_v2 else None,
         'v3': r_v3 if r_v3 and 'error' not in r_v3 else None,
+        # C-9: surface per-model warnings (e.g. "stale_features_used") on the
+        # compare card so the Ticker Lookup render path doesn't have to reach
+        # into each nested v2/v3 dict to tell whether a notice should show.
+        'v2_warnings': (r_v2.get('warnings') or []) if 'error' not in r_v2 else [],
+        'v3_warnings': ((r_v3 or {}).get('warnings') or []) if r_v3 and 'error' not in r_v3 else [],
     }
     if verbose:
         cp = result['current_price']

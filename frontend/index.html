@@ -1061,6 +1061,25 @@ function buildCompareCard(d) {
   const conf = d.confidence;
   const bs = d.best_strategy;
 
+  // C-9: if either Lite or Pro fell back to yesterday's features (today's
+  // feature row had NaN — e.g. ROC_60d on a young IPO, a missing Volume day),
+  // surface a muted amber notice directly above the consensus pill. Reuses
+  // the dashed-amber family established by the Bucket 2 N/A pill — quieter
+  // than the SELL-red or WATCH-amber banners so users don't conflate it
+  // with BUY/SELL/HOLD semantics.
+  const v2w = d.v2_warnings || [];
+  const v3w = d.v3_warnings || [];
+  const staleUsed = v2w.indexOf('stale_features_used') >= 0
+                 || v3w.indexOf('stale_features_used') >= 0;
+  const staleNotice = staleUsed
+    ? `<div role="status" aria-live="polite"
+            style="margin-bottom:12px;padding:8px 14px;border-radius:8px;font-size:12px;
+                   background:rgba(250,204,21,0.08);color:var(--yellow-text);
+                   border:1px dashed var(--yellow-border);letter-spacing:0.2px">
+         Some features are missing for today; prediction uses yesterday's values.
+       </div>`
+    : '';
+
   // Consensus banner
   const consBg = signalBg(cs);
   const consBorder = signalBorder(cs);
@@ -1137,6 +1156,7 @@ function buildCompareCard(d) {
         </div>
       </div>
 
+      ${staleNotice}
       <!-- Consensus -->
       <div class="consensus-box" style="background:${consBg};border:1px solid ${consBorder}">
         <div class="consensus-label">Consensus Signal</div>
