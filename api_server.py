@@ -688,6 +688,25 @@ async def api_movers(refresh: bool = False, version: str = None):
     })
 
 
+@app.get("/api/system/status")
+async def api_system_status():
+    """Runtime capability flags for the dashboard. H-3: Pro (v3) silently
+    renders 'Not available' when LightGBM is missing; the frontend reads
+    this endpoint on load and shows a persistent banner so users know the
+    Lite-vs-Pro comparison is off and how to enable it.
+    """
+    pro_available = bool(HAS_LGBM)
+    return JSONResponse({
+        "has_lgbm": pro_available,
+        "model_version": "v2",
+        "pro_available": pro_available,
+        "notes": {
+            "pro_unavailable_reason": None if pro_available else "lightgbm package not installed",
+            "install_hint": None if pro_available else "pip install lightgbm",
+        },
+    })
+
+
 @app.get("/api/symbols")
 async def api_symbols():
     """Return the full symbol universe with ETF classification."""
