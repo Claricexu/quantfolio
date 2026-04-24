@@ -1,3 +1,10 @@
+## 2026-04-24 — Round 5 + 6
+
+- Ticker Lookup flags predictions built from stale features when today's data is incomplete.
+- Dashboard shows a one-line banner on first load when the Pro model is unavailable, with install instructions.
+- Internal: new `/api/system/status` endpoint exposes runtime capability checks.
+- Internal: removed dead single-model-toggle code from the frontend.
+
 # Changelog
 
 User-visible changes to Quantfolio. Engineering-side commentary lives in `round2-summary.md` and `round3-summary.md`; this file is the short, readable story.
