@@ -165,6 +165,34 @@
     transition:color 0.15s; z-index:2; }
   .detail-card-wrap .detail-close:hover { color:var(--red-text); }
 
+  /* Inline verdict-card row (Round 7a Phase 2 / FB-2). The detail-row is
+     created/destroyed dynamically by openSymbolDetail() — it never carries the
+     HTML `hidden` attribute, so per PATTERNS.md P-1 the companion `[hidden]`
+     rule is intentionally omitted here. (The modal classes below DO carry it.) */
+  tr.detail-row { background:transparent; }
+  tr.detail-row > td.detail-cell { padding:8px 8px 14px; background:var(--bg-cell);
+    border-top:1px dashed var(--border); }
+  .detail-card-host { outline:none; }
+  .detail-card-host:focus-visible { box-shadow:0 0 0 2px var(--blue-light) inset; border-radius:8px; }
+
+  /* Mobile modal fallback (matchMedia max-width:700px). The overlay defaults
+     to display:flex so it centers the card; the [hidden] companion rule is
+     REQUIRED per PATTERNS.md P-1 because we toggle el.hidden on close /
+     teardown is dynamic. Without it the overlay would defeat the hidden
+     attribute (Round 2 commit 6fe66b0; Round 6 H-3 regression). */
+  .detail-modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.55);
+    display:flex; align-items:center; justify-content:center; z-index:1000;
+    padding:16px; }
+  .detail-modal-overlay[hidden] { display:none; }
+  .detail-modal-card { background:var(--bg-card); border:1px solid var(--border);
+    border-radius:10px; padding:14px 16px; max-width:560px; width:100%;
+    max-height:90vh; overflow-y:auto; position:relative; }
+  .detail-modal-card[hidden] { display:none; }
+  .detail-modal-card .detail-modal-close { position:absolute; top:8px; right:12px;
+    cursor:pointer; color:var(--text-ghost); font-size:20px; line-height:1;
+    padding:4px 10px; background:none; border:none; transition:color 0.15s; }
+  .detail-modal-card .detail-modal-close:hover { color:var(--red-text); }
+
   /* Summary cards for report */
   .summary-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px,1fr)); gap:12px; margin-bottom:24px; }
   .summary-card { background:var(--bg-card); border:1px solid var(--border); border-radius:10px; padding:16px; text-align:center; }
@@ -902,6 +930,10 @@ function buildVerdictCard(v) {
 //  TAB SWITCHING
 // =================================================================
 function switchTab(tab) {
+  // Phase 2 / FB-2: close any open verdict-card detail so it doesn't linger
+  // on Tab A while the user is now looking at Tab B. closeDetail() is a
+  // no-op when nothing is open.
+  if (typeof closeDetail === 'function') closeDetail();
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
   document.getElementById('tab-lookup').style.display = tab === 'lookup' ? '' : 'none';
   document.getElementById('tab-report').style.display = tab === 'report' ? '' : 'none';
@@ -1410,50 +1442,148 @@ function buildReportRow(r) {
   </tr>`;
 }
 
-// Click a symbol in a report table → show a fundamental detail panel just
-// ABOVE the clicked table (as a block-level sibling of .tbl-wrap, so its
-// width is bounded by the page column, not the wide scrollable table).
-// Click the same symbol again to collapse. Only one panel open at a time.
-async function openSymbolDetail(evt, symbol) {
-  evt.stopPropagation();
-  const row = evt.currentTarget.closest('tr');
-  const tblWrap = row && row.closest('.tbl-wrap');
-  if (!tblWrap) return;
+// Click a symbol in Daily Report or Leader Detector → expand the fundamental
+// verdict card inline as a sibling <tr> immediately BENEATH the clicked row
+// (Round 7a Phase 2 / FB-2). Click the same symbol again to collapse. Only
+// one detail open across both tabs at a time. Below 700px the panel renders
+// as a centered modal overlay because table rows are too narrow on phones.
+//
+// Module-level state: the currently-open detail row (only one across both
+// Daily Report and Leader Detector). When null, no detail-row exists in the
+// DOM \u2014 that's the "card hidden" default state. No CSS [hidden] toggle is
+// needed because the row is dynamically created/destroyed.
+let openDetail = null;
+let _detailEscHandler = null;
 
-  // If a detail for the same symbol is already open anywhere on the page, close it.
-  const existingSame = document.querySelector(`.detail-card-wrap[data-symbol="${CSS.escape(symbol)}"]`);
-  // Close all open details first
-  document.querySelectorAll('.detail-card-wrap').forEach(el => el.remove());
-  if (existingSame) return;
-
-  // Insert loading placeholder BEFORE the clicked table's .tbl-wrap
-  const wrap = document.createElement('div');
-  wrap.className = 'detail-card-wrap';
-  wrap.dataset.symbol = symbol;
-  wrap.innerHTML = `
+function _renderDetailLoading(host, symbol) {
+  host.innerHTML = `
     <div style="padding:10px 16px;color:var(--text-dim);font-size:12px;background:var(--bg-cell);border-radius:8px">
-      <span class="detail-close" onclick="this.closest('.detail-card-wrap').remove()" title="Close">\u2715</span>
       Loading ${symbol} fundamentals\u2026
     </div>`;
-  tblWrap.parentNode.insertBefore(wrap, tblWrap);
-  wrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
 
-  // Fetch and render
+function _renderDetailError(host, symbol, msg) {
+  host.innerHTML = `
+    <div style="padding:10px 16px;color:var(--red-text);font-size:12px;background:var(--bg-cell);border-radius:8px">
+      Failed to load ${symbol}: ${msg}
+    </div>`;
+}
+
+function _mountInlineDetail(clickedRow, symbol) {
+  // Colspan = current cell count of the clicked row at click time.
+  const colspan = clickedRow.children.length || 1;
+  const detailRow = document.createElement('tr');
+  detailRow.className = 'detail-row';
+  detailRow.dataset.detailFor = symbol;
+  detailRow.innerHTML = `
+    <td colspan="${colspan}" class="detail-cell">
+      <div class="detail-card-host" tabindex="-1"></div>
+    </td>`;
+  // Insert immediately after the clicked row.
+  clickedRow.parentNode.insertBefore(detailRow, clickedRow.nextSibling);
+  return detailRow;
+}
+
+function _mountModalDetail(symbol) {
+  const overlay = document.createElement('div');
+  overlay.className = 'detail-modal-overlay';
+  overlay.innerHTML = `
+    <div class="detail-modal-card" role="dialog" aria-modal="true" aria-label="Fundamental detail for ${symbol}">
+      <button type="button" class="detail-modal-close" aria-label="Close">\u2715</button>
+      <div class="detail-card-host" tabindex="-1"></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('.detail-modal-close').addEventListener('click', closeDetail);
+  // Overlay-click closes (but click on the inner card does not).
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeDetail();
+  });
+  return overlay;
+}
+
+async function openSymbolDetail(evt, symbol) {
+  evt.stopPropagation();
+
+  // Toggle: same-symbol click collapses.
+  if (openDetail && openDetail.symbol === symbol) {
+    closeDetail();
+    return;
+  }
+  // Different symbol \u2192 close any previous one first.
+  if (openDetail) closeDetail();
+
+  const clickedRow = evt.currentTarget.closest('tr');
+  if (!clickedRow) return;
+
+  // Below 700px we render a centered modal overlay instead of an inline row,
+  // because table rows are too narrow on phones.
+  const mode = (window.matchMedia && window.matchMedia('(max-width:700px)').matches)
+    ? 'modal' : 'inline';
+
+  const detailRowEl = (mode === 'inline')
+    ? _mountInlineDetail(clickedRow, symbol)
+    : _mountModalDetail(symbol);
+
+  if (mode === 'modal') {
+    // Escape closes the modal. Stored on module-level so closeDetail can detach.
+    _detailEscHandler = (e) => { if (e.key === 'Escape') closeDetail(); };
+    document.addEventListener('keydown', _detailEscHandler);
+  }
+
+  const host = detailRowEl.querySelector('.detail-card-host');
+  _renderDetailLoading(host, symbol);
+
+  const abortCtrl = new AbortController();
+  openDetail = { symbol, rowEl: clickedRow, detailRowEl, mode, abortCtrl };
+
+  // Focus host and (inline only) scroll it into view \u2014 the modal is already
+  // centered by its overlay.
+  try { host.focus({ preventScroll: true }); } catch (_) { /* noop */ }
+  if (mode === 'inline') {
+    host.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
   try {
-    const res = await fetchTimeout(`${API_BASE}/api/screener/${encodeURIComponent(symbol)}`, 30000);
+    const res = await fetch(`${API_BASE}/api/screener/${encodeURIComponent(symbol)}`,
+      { signal: abortCtrl.signal });
+    // Symbol-match guard before any DOM write \u2014 bail if the user moved on.
+    if (!openDetail || openDetail.symbol !== symbol) return;
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const v = await res.json();
+    if (!openDetail || openDetail.symbol !== symbol) return;
     const cardHTML = buildVerdictCard(v) ||
       `<div style="padding:10px 16px;color:var(--text-dim);font-size:12px;background:var(--bg-cell);border-radius:8px">No fundamental data for ${symbol}.</div>`;
-    wrap.innerHTML = `
-      <span class="detail-close" onclick="this.closest('.detail-card-wrap').remove()" title="Close">\u2715</span>
-      ${cardHTML}`;
+    host.innerHTML = cardHTML;
+    try { host.focus({ preventScroll: true }); } catch (_) { /* noop */ }
+    if (mode === 'inline') host.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   } catch (e) {
-    wrap.innerHTML = `
-      <div style="padding:10px 16px;color:var(--red-text);font-size:12px;background:var(--bg-cell);border-radius:8px">
-        <span class="detail-close" onclick="this.closest('.detail-card-wrap').remove()" title="Close">\u2715</span>
-        Failed to load ${symbol}: ${e.message || e}
-      </div>`;
+    // Wright nice-to-have: swallow AbortError so a fast close/reopen never
+    // surfaces as an unhandled rejection.
+    if (e && e.name === 'AbortError') return;
+    if (!openDetail || openDetail.symbol !== symbol) return;
+    _renderDetailError(host, symbol, e && e.message ? e.message : String(e));
+  }
+}
+
+function closeDetail() {
+  if (!openDetail) return;
+  // Abort any in-flight fetch before tearing down DOM.
+  try { openDetail.abortCtrl.abort(); } catch (_) { /* noop */ }
+
+  if (openDetail.detailRowEl && openDetail.detailRowEl.parentNode) {
+    openDetail.detailRowEl.parentNode.removeChild(openDetail.detailRowEl);
+  }
+  if (openDetail.mode === 'modal' && _detailEscHandler) {
+    document.removeEventListener('keydown', _detailEscHandler);
+    _detailEscHandler = null;
+  }
+
+  // Restore focus to the original symbol cell if still in the DOM.
+  const rowEl = openDetail.rowEl;
+  openDetail = null;
+  if (rowEl && rowEl.isConnected) {
+    const symCell = rowEl.querySelector('.symbol-cell') || rowEl;
+    try { symCell.focus({ preventScroll: true }); } catch (_) { /* noop */ }
   }
 }
 
@@ -1505,6 +1635,10 @@ function sortReportTable(tableId, key, rows) {
     return st.asc ? va - vb : vb - va;
   });
 
+  // Phase 2 / FB-2: close any open detail-row before rewriting tbody so we
+  // don't orphan a now-stale .detail-row in the DOM (the rewrite would clobber
+  // it anyway, but this keeps openDetail state in sync).
+  if (typeof closeDetail === 'function') closeDetail();
   const tbody = document.querySelector(`#${tableId} tbody`);
   if (tbody) tbody.innerHTML = sorted.map(buildReportRow).join('');
 
@@ -1982,6 +2116,10 @@ function sortLibraryTable(key) {
     return asc ? va - vb : vb - va;
   });
 
+  // Phase 2 / FB-2: Strategy Lab doesn't open verdict cards yet (Phase 3
+  // territory), but call closeDetail() now so a Phase-3 implementer doesn't
+  // have to come back and add it.
+  if (typeof closeDetail === 'function') closeDetail();
   const tbody = document.querySelector('#libTable tbody');
   if (tbody) tbody.innerHTML = sorted.map(buildLibraryRow).join('');
 
