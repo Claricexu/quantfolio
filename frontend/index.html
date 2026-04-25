@@ -1517,10 +1517,11 @@ let _detailEscHandler = null;
 const _verdictCache = new Map();
 
 function _renderDetailLoading(host, symbol) {
-  host.innerHTML = `
-    <div style="padding:10px 16px;color:var(--text-dim);font-size:12px;background:var(--bg-cell);border-radius:8px">
-      Loading ${symbol} fundamentals\u2026
-    </div>`;
+  // FB-2 polish (round-7a Issue A): swap the muted text-only div for the
+  // standard loaderHTML spinner so first-click latency on a cache miss has
+  // visible feedback. .loader/.spinner CSS already exists (~line 245); no
+  // new rules needed. Cache-hit path skips this entirely (see openSymbolDetail).
+  host.innerHTML = loaderHTML(`Loading ${symbol} fundamentals\u2026`);
 }
 
 function _renderDetailError(host, symbol, msg) {
@@ -1610,9 +1611,15 @@ async function openSymbolDetail(evt, symbol) {
   }
 
   const host = detailRowEl.querySelector('.detail-card-host');
+  // Sophia's deferred item 15 / round-7a Issue A: skip the loading paint
+  // when we already have the verdict cached — otherwise the cached card
+  // flashes the placeholder for one frame before swapping in. Cache lookup
+  // is cheap (Map.has); the actual fetch+set still happens in the verdict
+  // branch below. Charts have no cache, so chart-kind always paints loading.
+  const isCached = (kind === 'verdict') && _verdictCache.has(symbol);
   if (kind === 'chart') {
     _renderLibraryChartLoading(host, symbol);
-  } else {
+  } else if (!isCached) {
     _renderDetailLoading(host, symbol);
   }
 
