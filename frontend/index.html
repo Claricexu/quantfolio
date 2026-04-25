@@ -168,11 +168,26 @@
   /* Inline verdict-card row (Round 7a Phase 2 / FB-2). The detail-row is
      created/destroyed dynamically by openSymbolDetail() — it never carries the
      HTML `hidden` attribute, so per PATTERNS.md P-1 the companion `[hidden]`
-     rule is intentionally omitted here. (The modal classes below DO carry it.) */
+     rule is intentionally omitted here. (The modal classes below DO carry it.)
+
+     Round 7a regression fix: the .detail-cell <td colspan=N> inherits the
+     full table content width, which can exceed the visible viewport on the
+     wide Daily Report (10 cols) and Leader Detector (9 cols, inside an
+     overflow-x:auto wrapper) tables. Without the constraint below, the card's
+     right edge gets clipped silently by .tbl-wrap's overflow:hidden (Daily
+     Report) or scrolled off-screen (Leader Detector). The sticky+left:0 +
+     viewport-bounded width pins the card to the visible left edge of its
+     scroll container and caps the rendered width at the page-content width
+     (.container max-width 1060px minus 20px horizontal padding both sides
+     ⇒ 1020px content). Strategy Lab's chart card uses the same host, so
+     Chart.js's responsive canvas inherits the same constraint and fits. */
   tr.detail-row { background:transparent; }
-  tr.detail-row > td.detail-cell { padding:8px 8px 14px; background:var(--bg-cell);
+  tr.detail-row > td.detail-cell { padding:8px 0 14px; background:var(--bg-cell);
     border-top:1px dashed var(--border); }
   .detail-card-host { outline:none; }
+  .detail-cell .detail-card-host { position:sticky; left:0;
+    width:min(100%, calc(100vw - 40px)); max-width:1020px;
+    padding:0 8px; box-sizing:border-box; }
   .detail-card-host:focus-visible { box-shadow:0 0 0 2px var(--blue-light) inset; border-radius:8px; }
 
   /* Mobile modal fallback (matchMedia max-width:700px). The overlay defaults
