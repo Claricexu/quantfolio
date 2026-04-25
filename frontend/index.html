@@ -207,6 +207,19 @@
     padding:0 8px; box-sizing:border-box; }
   .detail-cell .detail-sticky-wrap > .detail-card-host { width:100%; }
 
+  /* Round 7a perf fix (FB-2 critical): Leader Detector path skips the
+     .detail-sticky-wrap (see _mountInlineDetail — sticky inside a 1,414-row
+     auto-layout table nested in .tbl-wrap > overflow-x:auto forces Blink to
+     re-measure all cells on every layout flush). The host needs explicit
+     width treatment so the verdict card layout doesn't depend on auto-sizing
+     inside the colspan'd <td>. The .detail-cell .detail-sticky-wrap >
+     .detail-card-host rule above handles the wrapped path; this rule handles
+     the unwrapped path. Direct-child selector ensures it doesn't double-apply
+     to the wrapped host (which is a grandchild). Preserves the 1020px content
+     cap from aec5e05. */
+  .detail-cell > .detail-card-host { width:min(100%, calc(100vw - 40px));
+    max-width:1020px; box-sizing:border-box; padding:0 8px; }
+
   /* Issue 3 / FB-2 / FB-8 polish: explicit close button on inline mode. Lives
      as a sibling of .detail-card-host inside .detail-sticky-wrap (NOT inside
      the host) so host.innerHTML rewrites in _renderDetailLoading / buildVerdictCard
@@ -1561,24 +1574,56 @@ function _mountInlineDetail(clickedRow, symbol) {
   // NOT inside it — because every render path (loading / verdict-card /
   // chart) overwrites host.innerHTML, which would wipe a child button.
   //
-  // Round-7a Issue B fix: both the close button and the host are wrapped in
-  // .detail-sticky-wrap. The wrap carries position:sticky + the viewport
-  // width clamp (CSS), which (a) keeps the card pinned to the visible left
-  // of any horizontally-overflowing table, and (b) becomes the containing
-  // block for the absolute-positioned close button. Without this wrap, the
-  // button anchored to .detail-cell would land at the right edge of a
-  // potentially-1500px-wide <td colspan=10> on Daily Report and get clipped
-  // by .tbl-wrap's overflow:hidden — i.e. invisible. Modal mode uses
-  // _mountModalDetail's own .detail-modal-close and is unaffected by this
-  // path; .detail-sticky-wrap is inline-only.
-  detailRow.innerHTML = `
-    <td colspan="${colspan}" class="detail-cell">
-      <div class="detail-sticky-wrap">
+  // Round-7a Issue B fix: on Daily Report and Strategy Lab, both the close
+  // button and the host are wrapped in .detail-sticky-wrap. The wrap carries
+  // position:sticky + the viewport width clamp (CSS), which (a) keeps the
+  // card pinned to the visible left of any horizontally-overflowing table,
+  // and (b) becomes the containing block for the absolute-positioned close
+  // button. Without this wrap, the button anchored to .detail-cell would
+  // land at the right edge of a potentially-1500px-wide <td colspan=10> on
+  // Daily Report and get clipped by .tbl-wrap's overflow:hidden — i.e.
+  // invisible. Modal mode uses _mountModalDetail's own .detail-modal-close
+  // and is unaffected by this path; .detail-sticky-wrap is inline-only.
+  //
+  // Round 7a perf fix (FB-2 critical): the Leader Detector table has 1,414
+  // rows wrapped in a NESTED scroll container
+  // (.tbl-wrap > <div overflow-x:auto> > <table>, see #leadersTblWrap at
+  // ~line 2935). A `position:sticky` descendant inside a row inserted into
+  // this structure forces Blink to re-measure all 12,700 cells AND recompute
+  // the sticky containing rect on every layout flush — the dominant cost in
+  // the click-to-paint freeze. We skip the sticky wrap on this path because
+  // the 9-column leader table fits within .container's 1020px content width
+  // at default zoom, so the close button anchored to .detail-cell (which
+  // already carries position:relative — see line 186) lands inside the
+  // visible viewport without needing the sticky wrap.
+  //
+  // Trade-off: at extreme zoom + horizontal scroll the close button can
+  // scroll out of view. The just-clicked row anchors the user's viewport,
+  // so scrolling back is straightforward — acceptable per Wright's
+  // directive. If the leader table grows wider than 1020px at default
+  // zoom, restore the sticky wrap path here.
+  //
+  // Daily Report and Strategy Lab keep the sticky wrap because their
+  // content can exceed 1020px and they don't have the same row-count
+  // explosion problem (Daily Report ~few hundred rows; Strategy Lab
+  // similar).
+  const isLeaderDetector = !!clickedRow.closest('#leadersTblWrap');
+  const innerHTML = isLeaderDetector
+    ? `
+      <td colspan="${colspan}" class="detail-cell">
         <button type="button" class="detail-inline-close" aria-label="Close detail"
                 onclick="closeDetail()">&times;</button>
         <div class="detail-card-host" tabindex="-1"></div>
-      </div>
-    </td>`;
+      </td>`
+    : `
+      <td colspan="${colspan}" class="detail-cell">
+        <div class="detail-sticky-wrap">
+          <button type="button" class="detail-inline-close" aria-label="Close detail"
+                  onclick="closeDetail()">&times;</button>
+          <div class="detail-card-host" tabindex="-1"></div>
+        </div>
+      </td>`;
+  detailRow.innerHTML = innerHTML;
   // Insert immediately after the clicked row.
   clickedRow.parentNode.insertBefore(detailRow, clickedRow.nextSibling);
   return detailRow;
