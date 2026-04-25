@@ -1804,13 +1804,17 @@ function closeDetail() {
     _detailEscHandler = null;
   }
 
-  // Restore focus to the original symbol cell if still in the DOM.
-  const rowEl = openDetail.rowEl;
+  // Round 7a perf fix (FB-2 follow-up): the previous focus-restore block
+  // called symCell.focus({preventScroll:true}) on the trigger row's
+  // .symbol-cell <td> (or the <tr> fallback). Neither carries a tabindex,
+  // so neither is focusable — the call is a no-op for keyboard users but
+  // still forces Blink to flush style+layout to compute focusability,
+  // which on the 1,414-row Leader Detector table compounded with the
+  // unavoidable removeChild() reflow into a multi-second freeze. The open
+  // path was fixed in fdb32ef/213720e; this is the close-path twin. With
+  // this gone, closeDetail() has exactly one layout-invalidating mutation
+  // (the row removal) which the browser can defer to its next rAF tick.
   openDetail = null;
-  if (rowEl && rowEl.isConnected) {
-    const symCell = rowEl.querySelector('.symbol-cell') || rowEl;
-    try { symCell.focus({ preventScroll: true }); } catch (_) { /* noop */ }
-  }
 }
 
 // Sort value extractors per column key
