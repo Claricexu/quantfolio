@@ -1163,6 +1163,12 @@ async function loadScreenerMap() {
       }
     }
     _screenerMap = m;
+    // FB-2 follow-up (perf): the screener CSV may have just been rebuilt
+    // (refreshReport → pollReport → loadScreenerMap), so any cached per-
+    // symbol verdict payloads from the prior session are now potentially
+    // stale. Drop them. The cost is one re-fetch per row the user re-opens
+    // after a refresh; the safety win is worth more than the perf cost.
+    _verdictCache.clear();
   } catch (_) { /* screener unavailable — leave map empty */ }
 }
 
@@ -1484,6 +1490,16 @@ function buildReportRow(r) {
 let openDetail = null;
 let _detailEscHandler = null;
 
+// FB-2 follow-up (perf): cache full `/api/screener/{symbol}` responses for the
+// session so re-clicking a row we've already opened skips the network entirely.
+// `_screenerMap` only carries the row-level subset (verdict/score/archetype/
+// reason/reason_text) — not enough to feed buildVerdictCard, which needs
+// tests/dealbreakers/good_firm_score/etc. So we keep a separate per-symbol
+// cache of the full payload. Lifetime is the page load: refreshing the page
+// re-fetches everything, which matches our screener-rebuild cadence (the CSV
+// only changes when the screener is re-run, never mid-session).
+const _verdictCache = new Map();
+
 function _renderDetailLoading(host, symbol) {
   host.innerHTML = `
     <div style="padding:10px 16px;color:var(--text-dim);font-size:12px;background:var(--bg-cell);border-radius:8px">
@@ -1597,12 +1613,23 @@ async function openSymbolDetail(evt, symbol) {
 
   try {
     if (kind === 'verdict') {
-      const res = await fetch(`${API_BASE}/api/screener/${encodeURIComponent(symbol)}`,
-        { signal: abortCtrl.signal });
-      if (!stillCurrent()) return;
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const v = await res.json();
-      if (!stillCurrent()) return;
+      // Cache hit: skip the round-trip entirely. No fetch → no AbortController
+      // signal to wire up; closeDetail() still calls abortCtrl.abort() but on
+      // an already-settled controller that's a no-op. stillCurrent() guard is
+      // preserved for symmetry (cheap, and protects against a synchronous
+      // close-then-reopen during the same task).
+      let v = _verdictCache.get(symbol);
+      if (v === undefined) {
+        const res = await fetch(`${API_BASE}/api/screener/${encodeURIComponent(symbol)}`,
+          { signal: abortCtrl.signal });
+        if (!stillCurrent()) return;
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        v = await res.json();
+        if (!stillCurrent()) return;
+        _verdictCache.set(symbol, v);
+      } else {
+        if (!stillCurrent()) return;
+      }
       const cardHTML = buildVerdictCard(v) ||
         `<div style="padding:10px 16px;color:var(--text-dim);font-size:12px;background:var(--bg-cell);border-radius:8px">No fundamental data for ${symbol}.</div>`;
       host.innerHTML = cardHTML;
