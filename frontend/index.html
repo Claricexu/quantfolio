@@ -1653,12 +1653,12 @@ async function openSymbolDetail(evt, symbol) {
   const abortCtrl = new AbortController();
   openDetail = { symbol, kind, rowEl: clickedRow, detailRowEl, mode, abortCtrl };
 
-  // Focus host and (inline only) scroll it into view \u2014 the modal is already
-  // centered by its overlay.
-  try { host.focus({ preventScroll: true }); } catch (_) { /* noop */ }
-  if (mode === 'inline') {
-    host.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  }
+  // Round 7a perf fix (FB-2 critical): the pre-fetch focus + scrollIntoView
+  // pair forced two synchronous layout flushes against a freshly-mutated
+  // 1,414-row table \u2014 a major contributor to the click-to-paint freeze. The
+  // row is already on screen (the user just clicked it) and the loading
+  // spinner doesn't need keyboard focus until content lands. Post-fetch
+  // focus + scrollIntoView (after host.innerHTML = cardHTML) handle both.
 
   // Highlight active library row (purely cosmetic; preserved from the old
   // viewLibraryChart implementation). closeDetail() clears it.
