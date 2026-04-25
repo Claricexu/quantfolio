@@ -432,7 +432,10 @@
     <div id="libCallout"></div>
     <p class="search-hint">Click a row to view its equity curve.</p>
     <div id="libTableWrap"></div>
-    <div id="libChartSection"></div>
+    <!-- Round 7a Phase 3 / FB-8: chart now expands inline beneath the clicked
+         library row (or as a modal overlay below 700px). The previous
+         #libChartSection bottom-of-tab container was removed; the chart card
+         is mounted into openDetail.detailRowEl by openSymbolDetail. -->
   </div>
 
   <!-- ================================================================= -->
@@ -1444,14 +1447,25 @@ function buildReportRow(r) {
 
 // Click a symbol in Daily Report or Leader Detector → expand the fundamental
 // verdict card inline as a sibling <tr> immediately BENEATH the clicked row
-// (Round 7a Phase 2 / FB-2). Click the same symbol again to collapse. Only
-// one detail open across both tabs at a time. Below 700px the panel renders
-// as a centered modal overlay because table rows are too narrow on phones.
+// (Round 7a Phase 2 / FB-2 + Phase 3 / FB-8). Click the same row again to
+// collapse. Only one detail open across all three tabs at a time. Below 700px
+// the panel renders as a centered modal overlay because table rows are too
+// narrow on phones.
 //
-// Module-level state: the currently-open detail row (only one across both
-// Daily Report and Leader Detector). When null, no detail-row exists in the
-// DOM \u2014 that's the "card hidden" default state. No CSS [hidden] toggle is
-// needed because the row is dynamically created/destroyed.
+// Two "kinds" share the same machinery (same state, same close hooks, same
+// AbortController, same modal/inline mounting):
+//   - kind === 'verdict': fetches /api/screener/{symbol} and renders
+//     buildVerdictCard() (Daily Report + Leader Detector tables).
+//   - kind === 'chart': fetches /api/backtest-chart/{symbol} and renders the
+//     5-strategy equity-curve comparison via renderEquityChart +
+//     renderStrategyStats (Strategy Lab #libTable).
+// Dispatch is by ancestor table id at click time \u2014 #libTable -> 'chart',
+// otherwise 'verdict'. Per Phase 3 design: one function, one state model,
+// no parallel openStrategyDetail.
+//
+// Module-level state: the currently-open detail row. When null, no detail-row
+// exists in the DOM \u2014 that's the "card hidden" default state. No CSS
+// [hidden] toggle is needed because the row is dynamically created/destroyed.
 let openDetail = null;
 let _detailEscHandler = null;
 
@@ -1504,19 +1518,26 @@ function _mountModalDetail(symbol) {
 async function openSymbolDetail(evt, symbol) {
   evt.stopPropagation();
 
-  // Toggle: same-symbol click collapses.
-  if (openDetail && openDetail.symbol === symbol) {
-    closeDetail();
-    return;
-  }
-  // Different symbol \u2192 close any previous one first.
-  if (openDetail) closeDetail();
-
   const clickedRow = evt.currentTarget.closest('tr');
   if (!clickedRow) return;
 
+  // Phase 3 / FB-8: dispatch by ancestor table \u2014 Strategy Lab's #libTable
+  // gets the chart card; everything else (Daily Report, Leader Detector)
+  // gets the verdict card. Single dispatcher, single openDetail state.
+  const kind = clickedRow.closest('#libTable') ? 'chart' : 'verdict';
+
+  // Toggle: same-row re-click collapses. Match on (symbol, kind) so that the
+  // same ticker appearing in two tabs is treated as two distinct expansions.
+  if (openDetail && openDetail.symbol === symbol && openDetail.kind === kind) {
+    closeDetail();
+    return;
+  }
+  // Different row \u2192 close any previous one first.
+  if (openDetail) closeDetail();
+
   // Below 700px we render a centered modal overlay instead of an inline row,
-  // because table rows are too narrow on phones.
+  // because table rows are too narrow on phones. Applies to both kinds \u2014
+  // Chart.js renders fine inside .bt-chart-wrap at modal widths.
   const mode = (window.matchMedia && window.matchMedia('(max-width:700px)').matches)
     ? 'modal' : 'inline';
 
@@ -1531,10 +1552,14 @@ async function openSymbolDetail(evt, symbol) {
   }
 
   const host = detailRowEl.querySelector('.detail-card-host');
-  _renderDetailLoading(host, symbol);
+  if (kind === 'chart') {
+    _renderLibraryChartLoading(host, symbol);
+  } else {
+    _renderDetailLoading(host, symbol);
+  }
 
   const abortCtrl = new AbortController();
-  openDetail = { symbol, rowEl: clickedRow, detailRowEl, mode, abortCtrl };
+  openDetail = { symbol, kind, rowEl: clickedRow, detailRowEl, mode, abortCtrl };
 
   // Focus host and (inline only) scroll it into view \u2014 the modal is already
   // centered by its overlay.
@@ -1543,25 +1568,62 @@ async function openSymbolDetail(evt, symbol) {
     host.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
 
+  // Highlight active library row (purely cosmetic; preserved from the old
+  // viewLibraryChart implementation). closeDetail() clears it.
+  if (kind === 'chart') {
+    document.querySelectorAll('#libTable tbody tr').forEach(tr => tr.classList.remove('lib-row-active'));
+    clickedRow.classList.add('lib-row-active');
+  }
+
+  // Symbol+kind-match guard helper \u2014 bail if the user moved on while we
+  // were awaiting the network. Used before every DOM write below.
+  const stillCurrent = () =>
+    openDetail && openDetail.symbol === symbol && openDetail.kind === kind;
+
   try {
-    const res = await fetch(`${API_BASE}/api/screener/${encodeURIComponent(symbol)}`,
-      { signal: abortCtrl.signal });
-    // Symbol-match guard before any DOM write \u2014 bail if the user moved on.
-    if (!openDetail || openDetail.symbol !== symbol) return;
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const v = await res.json();
-    if (!openDetail || openDetail.symbol !== symbol) return;
-    const cardHTML = buildVerdictCard(v) ||
-      `<div style="padding:10px 16px;color:var(--text-dim);font-size:12px;background:var(--bg-cell);border-radius:8px">No fundamental data for ${symbol}.</div>`;
-    host.innerHTML = cardHTML;
-    try { host.focus({ preventScroll: true }); } catch (_) { /* noop */ }
-    if (mode === 'inline') host.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    if (kind === 'verdict') {
+      const res = await fetch(`${API_BASE}/api/screener/${encodeURIComponent(symbol)}`,
+        { signal: abortCtrl.signal });
+      if (!stillCurrent()) return;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const v = await res.json();
+      if (!stillCurrent()) return;
+      const cardHTML = buildVerdictCard(v) ||
+        `<div style="padding:10px 16px;color:var(--text-dim);font-size:12px;background:var(--bg-cell);border-radius:8px">No fundamental data for ${symbol}.</div>`;
+      host.innerHTML = cardHTML;
+      try { host.focus({ preventScroll: true }); } catch (_) { /* noop */ }
+      if (mode === 'inline') host.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    } else {
+      // kind === 'chart': fetch backtest data; if status is 'pending' or
+      // 'running', show a spinner + start the poll loop (which also writes
+      // into this same host once the backtest finishes).
+      const res = await fetch(`${API_BASE}/api/backtest-chart/${encodeURIComponent(symbol)}`,
+        { signal: abortCtrl.signal });
+      if (!stillCurrent()) return;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (!stillCurrent()) return;
+
+      if (json.status === 'done') {
+        _renderLibraryChartCard(host, json, symbol);
+        try { host.focus({ preventScroll: true }); } catch (_) { /* noop */ }
+        if (mode === 'inline') host.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      } else if (json.status === 'error') {
+        _renderLibraryChartError(host, symbol, json.error || 'unknown');
+      } else {
+        _renderLibraryChartPending(host, symbol);
+        pollLibraryChart(symbol);
+      }
+    }
   } catch (e) {
-    // Wright nice-to-have: swallow AbortError so a fast close/reopen never
-    // surfaces as an unhandled rejection.
+    // Swallow AbortError \u2014 fast close/reopen must not surface as a rejection.
     if (e && e.name === 'AbortError') return;
-    if (!openDetail || openDetail.symbol !== symbol) return;
-    _renderDetailError(host, symbol, e && e.message ? e.message : String(e));
+    if (!stillCurrent()) return;
+    if (kind === 'chart') {
+      _renderLibraryChartError(host, symbol, e && e.message ? e.message : String(e));
+    } else {
+      _renderDetailError(host, symbol, e && e.message ? e.message : String(e));
+    }
   }
 }
 
@@ -1569,6 +1631,22 @@ function closeDetail() {
   if (!openDetail) return;
   // Abort any in-flight fetch before tearing down DOM.
   try { openDetail.abortCtrl.abort(); } catch (_) { /* noop */ }
+
+  // Phase 3 / FB-8: chart kind owns a Chart.js instance (_libChart) whose
+  // canvas lives inside detailRowEl. Removing the detail-row from the DOM
+  // would orphan the Chart.js handlers and leak a ResizeObserver, so destroy
+  // and null _libChart before we tear down the DOM. The lib-row-active
+  // highlight on the trigger row also gets cleared here so a stale highlight
+  // doesn't survive close.
+  if (openDetail.kind === 'chart') {
+    if (_libChart) {
+      try { _libChart.destroy(); } catch (_) { /* noop */ }
+      _libChart = null;
+    }
+    if (openDetail.rowEl && openDetail.rowEl.classList) {
+      openDetail.rowEl.classList.remove('lib-row-active');
+    }
+  }
 
   if (openDetail.detailRowEl && openDetail.detailRowEl.parentNode) {
     openDetail.detailRowEl.parentNode.removeChild(openDetail.detailRowEl);
@@ -2090,8 +2168,13 @@ function buildLibraryRow(item) {
   const shColor = v => v >= 1.0 ? 'var(--green-text)' : v >= 0.5 ? 'var(--yellow-text)' : 'var(--red-text)';
   const retColor = v => v >= 0 ? 'var(--green-text)' : 'var(--red-text)';
 
-  return `<tr onclick="viewLibraryChart('${item.symbol}')">
-    <td class="mono" style="font-weight:700;color:var(--text-primary)">${item.symbol}</td>
+  // Round 7a Phase 3 / FB-8: row click opens the strategy comparison chart as
+  // an inline detail-row beneath this <tr> (or modal below 700px), routed
+  // through the same openSymbolDetail dispatcher Phase 2 wired up. Detection
+  // of "chart" vs "verdict" mode happens inside openSymbolDetail by walking
+  // the clicked row's ancestor table.
+  return `<tr onclick="openSymbolDetail(event, '${item.symbol}')">
+    <td class="mono symbol-cell" style="font-weight:700;color:var(--text-primary)">${item.symbol}</td>
     <td style="font-weight:600;color:${strategyColor(bestKey)}"><span class="bt-legend-dot" style="background:${strategyColor(bestKey)}"></span>${strategyShortName(bestKey)}</td>
     <td class="mono" style="color:${retColor(bestRet || 0)}">${bestRet != null ? (bestRet >= 0 ? '+' : '') + bestRet + '%' : '\u2014'}</td>
     <td class="mono" style="color:${retColor(bhRet || 0)}">${bhRet != null ? (bhRet >= 0 ? '+' : '') + bhRet + '%' : '\u2014'}</td>
@@ -2116,9 +2199,12 @@ function sortLibraryTable(key) {
     return asc ? va - vb : vb - va;
   });
 
-  // Phase 2 / FB-2: Strategy Lab doesn't open verdict cards yet (Phase 3
-  // territory), but call closeDetail() now so a Phase-3 implementer doesn't
-  // have to come back and add it.
+  // Phase 2 / FB-2 + Phase 3 / FB-8: closing any open detail before we wipe
+  // tbody.innerHTML keeps openDetail state in sync with the DOM. Without
+  // this, the rewrite would clobber the inline detail-row but leave a stale
+  // openDetail object pointing at a detached node — and for chart kind would
+  // also leak the _libChart canvas. closeDetail() is a no-op when nothing
+  // is open.
   if (typeof closeDetail === 'function') closeDetail();
   const tbody = document.querySelector('#libTable tbody');
   if (tbody) tbody.innerHTML = sorted.map(buildLibraryRow).join('');
@@ -2167,85 +2253,105 @@ function renderLibraryTable(json) {
   sortLibraryTable('best_sh');
 }
 
-// ── View individual ticker chart in library ──
-async function viewLibraryChart(symbol) {
-  const chartSec = document.getElementById('libChartSection');
-  chartSec.innerHTML = `
-    <div class="card fade-in" style="margin-top:16px">
+// Library chart card renderers (Round 7a Phase 3 / FB-8)
+//
+// These write into a host element provided by openSymbolDetail (the
+// .detail-card-host inside the inline detail-row, or the modal equivalent).
+// They no longer know or care where that host lives -- the bottom-of-tab
+// #libChartSection container is gone. Same .card wrapper / .bt-chart-wrap
+// rules from Phase 2's CSS apply, so chart-mode reuses verdict-mode styling.
+function _renderLibraryChartLoading(host, symbol) {
+  host.innerHTML = `
+    <div class="card fade-in">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <div>
-          <div style="font-size:16px;font-weight:700;color:var(--text-primary)">${symbol} \u2014 Strategy Comparison</div>
+          <div style="font-size:16px;font-weight:700;color:var(--text-primary)">${symbol} — Strategy Comparison</div>
           <div style="font-size:11px;color:var(--text-faint);margin-top:2px">Walk-forward backtest &bull; $10,000 starting capital &bull; 5 strategies</div>
         </div>
       </div>
-      <div class="loader"><div class="spinner"></div>Loading backtest data\u2026</div>
+      <div class="loader"><div class="spinner"></div>Loading backtest data…</div>
     </div>`;
-  chartSec.scrollIntoView({ behavior: 'smooth', block: 'start' });
-
-  // Highlight active row
-  document.querySelectorAll('#libTable tbody tr').forEach(tr => tr.classList.remove('lib-row-active'));
-  document.querySelectorAll('#libTable tbody tr').forEach(tr => {
-    if (tr.querySelector('td') && tr.querySelector('td').textContent === symbol) tr.classList.add('lib-row-active');
-  });
-
-  try {
-    const res = await fetchTimeout(`${API_BASE}/api/backtest-chart/${encodeURIComponent(symbol)}`, 120000);
-    const json = await res.json();
-
-    if (json.status === 'done') {
-      chartSec.innerHTML = `
-        <div class="card fade-in" style="margin-top:16px">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-            <div>
-              <div style="font-size:16px;font-weight:700;color:var(--text-primary)">${symbol} \u2014 Strategy Comparison</div>
-              <div style="font-size:11px;color:var(--text-faint);margin-top:2px">Walk-forward backtest &bull; $10,000 starting capital &bull; 5 strategies</div>
-            </div>
-          </div>
-          <div class="bt-chart-wrap"><canvas id="libCanvas"></canvas></div>
-          <div id="libStats"></div>
-        </div>`;
-      _libChart = renderEquityChart(json, 'libCanvas', _libChart);
-      renderStrategyStats(json, 'libStats');
-    } else if (json.status === 'error') {
-      chartSec.innerHTML = `<div class="card fade-in" style="margin-top:16px"><div class="error-box">Backtest error for ${symbol}: ${json.error}</div></div>`;
-    } else {
-      // Still running or not cached yet — show spinner and poll
-      chartSec.innerHTML = `
-        <div class="card fade-in" style="margin-top:16px">
-          <div class="loader"><div class="spinner"></div>Backtest for ${symbol} is running\u2026 This may take 4\u20138 minutes.</div>
-        </div>`;
-      pollLibraryChart(symbol);
-    }
-  } catch (e) {
-    chartSec.innerHTML = `<div class="card fade-in" style="margin-top:16px"><div class="error-box">Failed to load chart: ${e.message}</div></div>`;
-  }
 }
 
+function _renderLibraryChartPending(host, symbol) {
+  host.innerHTML = `
+    <div class="card fade-in">
+      <div class="loader"><div class="spinner"></div>Backtest for ${symbol} is running… This may take 4–8 minutes.</div>
+    </div>`;
+}
+
+function _renderLibraryChartError(host, symbol, msg) {
+  host.innerHTML = `<div class="card fade-in"><div class="error-box">Backtest error for ${symbol}: ${msg}</div></div>`;
+}
+
+function _renderLibraryChartCard(host, json, symbol) {
+  // Destroy any prior _libChart before innerHTML wipes its <canvas> from the
+  // DOM -- Chart.js keeps a ResizeObserver on the canvas and would leak.
+  if (_libChart) {
+    try { _libChart.destroy(); } catch (_) { /* noop */ }
+    _libChart = null;
+  }
+  host.innerHTML = `
+    <div class="card fade-in">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div>
+          <div style="font-size:16px;font-weight:700;color:var(--text-primary)">${symbol} — Strategy Comparison</div>
+          <div style="font-size:11px;color:var(--text-faint);margin-top:2px">Walk-forward backtest &bull; $10,000 starting capital &bull; 5 strategies</div>
+        </div>
+      </div>
+      <div class="bt-chart-wrap"><canvas id="libCanvas"></canvas></div>
+      <div id="libStats"></div>
+    </div>`;
+  _libChart = renderEquityChart(json, 'libCanvas', _libChart);
+  renderStrategyStats(json, 'libStats');
+}
+
+// Polls the backtest endpoint while a backtest job is still running. Phase 3
+// guards every DOM write against openDetail drift -- if the user closed the
+// detail or clicked a different row, abort the poll. Writes go into the live
+// detail-card-host (inline or modal), never into a removed #libChartSection.
 function pollLibraryChart(symbol) {
   let failCount = 0;
   const iv = setInterval(async () => {
+    // Drift check: openDetail must still be the chart card for THIS symbol.
+    // Mismatch (or null) means the user closed or moved on -- bail.
+    if (!openDetail || openDetail.symbol !== symbol || openDetail.kind !== 'chart') {
+      clearInterval(iv);
+      return;
+    }
     try {
       const res = await fetchTimeout(`${API_BASE}/api/backtest-chart/${encodeURIComponent(symbol)}`);
       const json = await res.json();
+      // Re-check after the await -- may have closed mid-flight.
+      if (!openDetail || openDetail.symbol !== symbol || openDetail.kind !== 'chart') {
+        clearInterval(iv);
+        return;
+      }
       failCount = 0;
+      const host = openDetail.detailRowEl.querySelector('.detail-card-host');
+      if (!host) { clearInterval(iv); return; }
       if (json.status === 'done') {
         clearInterval(iv);
-        viewLibraryChart(symbol);
+        _renderLibraryChartCard(host, json, symbol);
       } else if (json.status === 'error') {
         clearInterval(iv);
-        document.getElementById('libChartSection').innerHTML =
-          `<div class="card fade-in" style="margin-top:16px"><div class="error-box">Backtest failed for ${symbol}: ${json.error}</div></div>`;
+        _renderLibraryChartError(host, symbol, json.error || 'unknown');
       }
+      // else: still pending -- leave the spinner up, keep polling.
     } catch (_) {
       failCount++;
       if (failCount >= 5) {
         clearInterval(iv);
-        document.getElementById('libChartSection').innerHTML =
-          `<div class="card fade-in" style="margin-top:16px"><div class="error-box">Lost connection. Refresh the page to retry.</div></div>`;
+        if (!openDetail || openDetail.symbol !== symbol || openDetail.kind !== 'chart') return;
+        const host = openDetail.detailRowEl.querySelector('.detail-card-host');
+        if (host) {
+          host.innerHTML = `<div class="card fade-in"><div class="error-box">Lost connection. Refresh the page to retry.</div></div>`;
+        }
       }
     }
   }, 3000);
 }
+
 
 // ── Batch backtest runner ──
 async function runBatchBacktest() {
