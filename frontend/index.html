@@ -185,20 +185,38 @@
   tr.detail-row > td.detail-cell { padding:8px 0 14px; background:var(--bg-cell);
     border-top:1px dashed var(--border); position:relative; }
   .detail-card-host { outline:none; }
-  .detail-cell .detail-card-host { position:sticky; left:0;
+  .detail-card-host:focus-visible { box-shadow:0 0 0 2px var(--blue-light) inset; border-radius:8px; }
+
+  /* Round-7a Issue B fix: the .detail-cell <td colspan=N> can be wider than
+     the visible viewport on tables whose total column width exceeds 1020px
+     (Daily Report's 10-column table is the trigger; Strategy Lab's 8-col
+     stays under the limit, Leader Detector lives inside an overflow-x:auto
+     wrapper). Without a sticky wrap here, the close button (anchored via
+     position:absolute; right:18px) lands at the cell's right edge — past the
+     visible viewport — and gets clipped by .tbl-wrap's overflow:hidden. The
+     wrap pins both the card host AND the close button to the visible left
+     of the scroll container, so the button always lands inside the visible
+     card area. position:sticky establishes a containing block for absolute
+     descendants (CSS Positioned Layout Module Level 3), so the inline-close
+     anchors to .detail-sticky-wrap automatically — no extra position:relative
+     needed. The wrap is created/destroyed dynamically with the detail-row,
+     so per PATTERNS.md P-1 it never carries the HTML `hidden` attribute and
+     no `[hidden]` companion rule is needed. */
+  .detail-cell .detail-sticky-wrap { position:sticky; left:0;
     width:min(100%, calc(100vw - 40px)); max-width:1020px;
     padding:0 8px; box-sizing:border-box; }
-  .detail-card-host:focus-visible { box-shadow:0 0 0 2px var(--blue-light) inset; border-radius:8px; }
+  .detail-cell .detail-sticky-wrap > .detail-card-host { width:100%; }
+
   /* Issue 3 / FB-2 / FB-8 polish: explicit close button on inline mode. Lives
-     as a sibling of .detail-card-host inside the <td.detail-cell> (NOT inside
+     as a sibling of .detail-card-host inside .detail-sticky-wrap (NOT inside
      the host) so host.innerHTML rewrites in _renderDetailLoading / buildVerdictCard
-     / chart renderers don't wipe it. Anchored to top-right of .detail-cell via
-     position:absolute on the cell's position:relative. The card itself has 24px
-     padding so top:14px / right:18px lands the X visually inside the card's
-     top-right corner. The button is created/destroyed with the detail-row, so
-     it never carries the HTML `hidden` attribute and (per PATTERNS.md P-1) no
-     `[hidden]` companion rule is needed. Modal mode uses .detail-modal-close;
-     this rule does NOT apply there. */
+     / chart renderers don't wipe it. Anchored to top-right of the sticky wrap
+     (which is the nearest positioned ancestor) via position:absolute. The card
+     itself has 24px padding so top:14px / right:18px lands the X visually
+     inside the card's top-right corner. The button is created/destroyed with
+     the detail-row, so it never carries the HTML `hidden` attribute and
+     (per PATTERNS.md P-1) no `[hidden]` companion rule is needed. Modal mode
+     uses .detail-modal-close; this rule does NOT apply there. */
   .detail-inline-close { position:absolute; top:14px; right:18px; z-index:2;
     background:transparent; border:none; color:var(--text-faint);
     cursor:pointer; font-size:18px; line-height:1; padding:2px 8px;
@@ -1541,16 +1559,25 @@ function _mountInlineDetail(clickedRow, symbol) {
   // obvious way to dismiss the card (re-clicking the row already toggles, but
   // wasn't discoverable). Rendered as a sibling of .detail-card-host —
   // NOT inside it — because every render path (loading / verdict-card /
-  // chart) overwrites host.innerHTML, which would wipe a child button. The
-  // td.detail-cell carries position:relative so this absolute-positioned
-  // button anchors to the cell's top-right; CSS pads it inward to land on
-  // the card's interior corner. Modal mode uses _mountModalDetail's own
-  // .detail-modal-close and is unaffected by this path.
+  // chart) overwrites host.innerHTML, which would wipe a child button.
+  //
+  // Round-7a Issue B fix: both the close button and the host are wrapped in
+  // .detail-sticky-wrap. The wrap carries position:sticky + the viewport
+  // width clamp (CSS), which (a) keeps the card pinned to the visible left
+  // of any horizontally-overflowing table, and (b) becomes the containing
+  // block for the absolute-positioned close button. Without this wrap, the
+  // button anchored to .detail-cell would land at the right edge of a
+  // potentially-1500px-wide <td colspan=10> on Daily Report and get clipped
+  // by .tbl-wrap's overflow:hidden — i.e. invisible. Modal mode uses
+  // _mountModalDetail's own .detail-modal-close and is unaffected by this
+  // path; .detail-sticky-wrap is inline-only.
   detailRow.innerHTML = `
     <td colspan="${colspan}" class="detail-cell">
-      <button type="button" class="detail-inline-close" aria-label="Close detail"
-              onclick="closeDetail()">&times;</button>
-      <div class="detail-card-host" tabindex="-1"></div>
+      <div class="detail-sticky-wrap">
+        <button type="button" class="detail-inline-close" aria-label="Close detail"
+                onclick="closeDetail()">&times;</button>
+        <div class="detail-card-host" tabindex="-1"></div>
+      </div>
     </td>`;
   // Insert immediately after the clicked row.
   clickedRow.parentNode.insertBefore(detailRow, clickedRow.nextSibling);
