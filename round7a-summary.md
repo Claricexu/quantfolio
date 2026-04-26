@@ -7,7 +7,9 @@ Three-agent team (skipper writes, wright + sophia review). Two feedback items cl
 
 ---
 
-## ASK — backend follow-up authorization needed
+## ASK — backend follow-up authorization needed — RESOLVED by `3d1fbae`
+
+**Status: Resolved by `3d1fbae` (`fix: weekend-aware cache freshness with cold-start disk fallback (Regression B follow-up)`).** See **Regression B resolved** section below for fix shape, verification cases, and deferred follow-ups.
 
 Round 7a closes with one outstanding owner-reported regression that this round CANNOT fix because the root cause lives in `api_server.py`, not in `frontend/index.html`. The user reported a ~50-second recompute delay on the Ticker Lookup tab; investigation traced it to two server-side issues (full diagnosis in **Regression B investigation** below). The fix requires two backend changes:
 
@@ -75,6 +77,7 @@ After the initial Phase 2/3 commits landed, owner click-through surfaced three i
 | `fdb32ef` | perf: drop redundant pre-fetch focus + scrollIntoView in inline detail open (FB-2 critical, prep) | Owner reported multi-second browser-wide freeze on Leader Detector ticker row click. First of two staged perf commits — removes the pre-fetch `host.focus()` + `host.scrollIntoView()` calls, cutting two of the four synchronous layout flushes per click. Trivial revert if needed. |
 | `213720e` | perf: eliminate synchronous freeze on Leader Detector row click (FB-2 critical) | Second staged perf commit. Makes `.detail-sticky-wrap` conditional — Leader Detector path renders WITHOUT the sticky wrap (close button anchors to `<td.detail-cell>` directly via new `.detail-cell > .detail-card-host` direct-child CSS). Daily Report and Strategy Lab keep the sticky wrap. Removes the `position:sticky` descendant that was forcing Blink to recompute the sticky containing rect against the inner scroll container on every layout flush across all 12,700 cells. |
 | `7edc7bb` | perf: drop post-mutation focus call from `closeDetail` to fix close-path freeze (FB-2 verification round 4 follow-up) | Verification round 4 surfaced a multi-second freeze on the **close** path symmetric to the open-path freeze that `213720e` fixed. Removed the post-mutation `symCell.focus({preventScroll:true})` call from `closeDetail()` (was at line 1807-1813). Symbol cell has no `tabindex` so the call was a functional no-op, but it forced a synchronous layout flush in Blink that re-measured all 12,700 cells of the 1,414-row Leader Detector auto-layout table after the row removal. Cuts sync layout-flush triggers on the close path from 2 to 1; the remaining `removeChild` invalidation defers to the natural rAF tick. The click-another-ticker case (`closeDetail` → `openSymbolDetail`) now batches both row removal and new row insertion into a single rAF reflow. Sophia LGTM with notes — see deferred items 29 + 30. |
+| `3d1fbae` | fix: weekend-aware cache freshness with cold-start disk fallback (Regression B follow-up) | Backend-only fix to `api_server.py`. Replaces the 22h time-gate with a `_is_cached_report_acceptable` helper that asks "has a Mon-Fri 4:05pm EST scheduled run occurred between the cache timestamp and now?" — preserving the 22h short-circuit for the common weekday path. Adds cold-start fallback: when `_report_cache["data"]` is empty, calls `_load_latest_report_from_disk()` and re-snapshots before the freshness check. Wright-required clock-skew guard rejects future-dated caches. 5/5 verification cases pass (AST extraction + Python execution). Closes Regression B. |
 
 ### Additional deferred items from this patch round
 
@@ -117,9 +120,9 @@ Sophia LGTM'd `7edc7bb` with two a11y follow-ups that are now unblocked / surfac
 
 ---
 
-## Regression B investigation — out of scope
+## Regression B investigation — out of scope — RESOLVED by `3d1fbae`
 
-**Status: investigated, NO frontend commit on Round 7a. Awaiting user authorization for a backend follow-up round.** Wright AGREE with skipper diagnosis.
+**Status: RESOLVED by `3d1fbae`.** Investigation preserved below as historical context. See **Regression B resolved** section that follows for the fix shape and verification cases. Wright AGREE with skipper diagnosis.
 
 **User report.** Owner reported a ~50-second recompute delay on the Ticker Lookup tab during verification round 4. User hypothesised the cause was a recent Round 7a commit — specifically `b118394` — that may have inadvertently broken or removed a frontend prediction cache.
 
@@ -254,6 +257,47 @@ Re-test these scenarios after pulling `agent-round7a` (hard-refresh between tabs
 
 ---
 
+## Regression B resolved
+
+**Status: resolved by `3d1fbae` (`fix: weekend-aware cache freshness with cold-start disk fallback (Regression B follow-up)`).** Backend-only — `api_server.py` only, no frontend changes. User-authorized two-change scope.
+
+**Fix shape.**
+
+- **`_is_cached_report_acceptable` helper.** Replaces the 22h time-gate with a calendar-aware predicate that walks the schedule between the cache timestamp and now, and returns True iff no Mon-Fri 4:05pm EST scheduled run has fired in that window — i.e. the cache IS the freshest available. Preserves the 22h short-circuit for the common weekday path so we don't pay the schedule walk on every request.
+- **Cold-start disk fallback.** When `_report_cache["data"]` is empty after the first lock-snapshot, the code calls `_load_latest_report_from_disk()` (which populates the in-process cache as a side-effect under its own lock), then re-snapshots before the freshness check. Server restart before opening the Daily Report tab now hits the disk cache instead of falling through to a fresh ~50s compute.
+- **Wright-required clock-skew guard.** Future-dated caches return False. NTP skew or a manual clock change can no longer make a cache "fresh forever".
+- **Placement.** Helpers placed above `_get_cached_compare_result`. Imports added at line 28: `timedelta` from `datetime`, `ZoneInfo` from `zoneinfo`.
+- **Verification.** 5/5 cases pass via AST extraction + Python execution (weekend, cold-start, weekday-fresh, weekday-stale, clock-skew).
+
+**Why the spec'd 22h gate was wrong.** The 22h window was a proxy for "did today's scheduled run already happen?". On a Saturday, Friday's 4:05pm report is the freshest available — but by Saturday 2pm it's already 22h old, so the gate rejects it and the user pays a 50s recompute even though no newer report exists or could exist (the next scheduled run is Monday 4:05pm). The same trap applies any time the user opens Ticker Lookup more than 22h after the most recent scheduled run, regardless of whether a newer run has actually fired.
+
+**Why the new logic is correct.** The helper asks "is this cache the freshest available?" instead of "is this cache less than X hours old?". It walks the APScheduler `Mon-Fri 16:05 America/New_York` cron forward from the cache timestamp; if no firing falls in `(cache_ts, now)`, the cache is acceptable. Weekend-fresh, weekday-fresh, and post-restart cold-start all hit the cache; only a cache that genuinely predates a scheduled run gets invalidated.
+
+**Two verified-resolved cases.**
+
+1. **Weekend cache hit.** Saturday at any hour: Friday's 4:05pm report is the most recent scheduled run; helper returns True; Ticker Lookup serves cache. Pre-fix: 22h gate rejected after Saturday ~2pm and forced 50s recompute.
+2. **Cold-start cache hit.** Server restart at any time, then Ticker Lookup opened before Daily Report tab: in-process cache is empty; cold-start fallback loads the latest dual report from disk and serves cache. Pre-fix: in-process cache was None and `_load_latest_report_from_disk` was never invoked from the predict-compare path, so cold-start always paid the 50s recompute regardless of disk freshness.
+
+**Deferred items (4) — file as follow-ups.**
+
+1. **Latent timezone bug — file before any non-EST deployment.** `_run_dual_report` (line 609) and `_load_latest_report_from_disk` (line ~636) still write naive timestamps. The new helper treats them as `America/New_York` via the `if report_timestamp.tzinfo is None: ... replace(tzinfo=...)` clause. Correct on the user's Windows EST machine; latent risk if deploying to a UTC server. 4-line fix in two places: `datetime.now(tz=ZoneInfo("America/New_York"))`. Wright recommended this as a separate commit; deferred per the user's two-change scope for `3d1fbae`.
+2. **US market holidays not handled.** The schedule walk only checks Mon-Fri, not holidays. APScheduler also doesn't know about holidays — the two are consistent. On a holiday Monday the cron fires, produces a report, and the helper says "fresh until next Mon-Fri 4:05pm". Acceptable for now.
+3. **Single source of truth for the cron expression.** `Mon-Fri 16:05 America/New_York` lives in three places: APScheduler block at `api_server.py:330`, helper docstring at line 471, inline comment at line 488. If the cron ever changes, all three must move together. Future cleanup: extract a `DAILY_REPORT_CRON` constant.
+4. **No automated tests added.** The helpers are trivially unit-testable but the project does not have a pytest suite for `api_server.py`. Filing as a follow-up; verification was done via AST extraction + ad-hoc Python execution against fixtures for the five cases.
+
+---
+
+## Verification round 6
+
+Re-test these scenarios after pulling `agent-round7a` (hard-refresh between tabs). Focus is the Regression B fix (`3d1fbae`): weekend-aware cache freshness + cold-start disk fallback.
+
+1. **Same-day cache hit.** With a fresh Daily Report on disk run earlier today, open Ticker Lookup and enter a ticker. Expected: instant prediction (cache hit, within 22h short-circuit).
+2. **Weekend cache hit.** Today is Saturday 2026-04-25. Friday's 4:05pm report is the most recent scheduled run. Open Ticker Lookup and enter any ticker that was in Friday's report. Expected: instant prediction (cache hit via weekend-aware schedule walk, even though the cache is >22h old).
+3. **Cold-start cache hit.** Stop the server (Ctrl+C). Restart with `.\start_dashboard.bat`. Without opening the Daily Report tab first, go directly to Ticker Lookup and enter a ticker. Expected: instant prediction (cache hit via disk-load fallback when `_report_cache["data"]` is empty).
+4. **Stale-cache invalidation.** When a scheduled run has occurred since the cache timestamp, Ticker Lookup should fall through to fresh compute as before. No specific user action required; this is the default behaviour and should remain unchanged for stale caches.
+
+---
+
 ## Session end
 
-Two features shipped, two commits on `agent-round7a` (plus this summary). Eight post-merge patches followed (`aec5e05`, `8b5074a`, `b118394`, `8a550ac`, `090a3c4`, `fdb32ef`, `213720e`, `7edc7bb`) addressing owner-reported clipping, perf, discoverability, loading feedback, Daily Report close-button visibility, the Leader Detector open-path multi-second click freeze, and the close-path freeze. Branch is ready for owner verification round 5, then merge to `main`. Phase 7d picks up the thirty deferred a11y/polish items above. Regression B (Ticker Lookup ~50s recompute) is documented as out-of-scope for Round 7a and **awaits user authorization for a backend follow-up round** to fix `api_server.py:488` (22h freshness gate) and `api_server.py:478-482` (cold-start disk-cache miss).
+Two features shipped, two commits on `agent-round7a` (plus this summary). Nine post-merge patches followed (`aec5e05`, `8b5074a`, `b118394`, `8a550ac`, `090a3c4`, `fdb32ef`, `213720e`, `7edc7bb`, `3d1fbae`) addressing owner-reported clipping, perf, discoverability, loading feedback, Daily Report close-button visibility, the Leader Detector open-path and close-path freezes, and Regression B (Ticker Lookup weekend / cold-start cache misses). **`3d1fbae` completes the Round 7a verification cycle: all originally-reported user issues from rounds 2-5 are now resolved.** Branch is ready for owner verification round 6, then merge to `main`. Phase 7d picks up the thirty UI/a11y deferred items plus the four Regression B follow-ups (tz-aware writes before non-EST deploy, US market holiday handling, single source of truth for the cron expression, automated tests for `api_server.py`).
