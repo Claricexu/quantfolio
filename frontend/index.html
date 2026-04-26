@@ -1950,14 +1950,17 @@ function buildReportTable(rows) {
   const tid = `rptTbl${_reportTableId++}`;
   const trs = rows.map(buildReportRow).join('');
 
-  // Bucket 2: surface the screener_results.csv mtime on the Firm Score
-  // column header so users can tell at a glance whether the fundamental
-  // verdict column is fresh (e.g. after a leaders rebuild).
-  const asOfLabel = fmtAsOf(_screenerComputedAt);
-  const firmScoreLabel = asOfLabel
-    ? `Firm Score <span class="as-of-chip" title="${escapeHTML(asOfLabel)}">${escapeHTML(asOfLabel)}</span>`
-    : 'Firm Score';
-
+  // Round 7b / FB-7 (regression fix): the per-table "As of <screener mtime>"
+  // chip that previously rode along with the Firm Score header is removed
+  // here. With the new banner clause ("Close prices as of <Date>" /
+  // "<N> symbols' close price as of <Date>, …" — see _buildAsOfBreakdown),
+  // a second per-table-header timestamp surfaces the same daily-run cadence
+  // and reads as a redundant column. The screener-mtime axis is collapsed
+  // into the banner; if we ever need a distinct verdict-freshness signal
+  // again it should live in the banner alongside the close-price clause,
+  // not as a per-header chip on every table instance.
+  // The Leader Detector chip on its own table (line ~3119) stays — that's
+  // a different tab/scope and the banner clause does not render there.
   const cols = [
     { key: 'symbol',    label: 'Symbol' },
     { key: 'price',     label: 'Price' },
@@ -1968,7 +1971,7 @@ function buildReportTable(rows) {
     { key: 'consensus', label: 'Consensus' },
     { key: 'conf',      label: 'Conf' },
     { key: 'strategy',  label: 'Best Strategy' },
-    { key: 'gf_score',  label: firmScoreLabel },
+    { key: 'gf_score',  label: 'Firm Score' },
   ];
 
   const dataKey = `_rptData_${tid}`;
