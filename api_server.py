@@ -25,7 +25,8 @@ import threading
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
@@ -465,6 +466,44 @@ async def api_predict(symbol: str, version: str = None, strategy: str = None,
     return JSONResponse(result)
 
 
+def _is_cached_report_acceptable(report_timestamp: datetime, now: datetime | None = None) -> bool:
+    """Return True if the cached report is the freshest available.
+
+    Daily Report scheduler runs Mon-Fri at 4:05pm EST. A cached report is
+    acceptable when no scheduled run has occurred between the cache timestamp
+    and now — so Friday's report stays valid through Monday 4:05pm.
+    """
+    if now is None:
+        now = datetime.now(tz=ZoneInfo("America/New_York"))
+    if report_timestamp.tzinfo is None:
+        report_timestamp = report_timestamp.replace(tzinfo=ZoneInfo("America/New_York"))
+
+    age = now - report_timestamp
+    # Clock-skew guard: a future-dated cache (NTP skew, manual clock change)
+    # would otherwise short-circuit to "fresh forever". Reject and let the
+    # next scheduled run rebuild it.
+    if age.total_seconds() < 0:
+        return False
+    # Within 22h is always fresh — short-circuit to skip the schedule walk.
+    if age.total_seconds() < 22 * 3600:
+        return True
+    return not _scheduled_run_occurred_between(report_timestamp, now)
+
+
+def _scheduled_run_occurred_between(start: datetime, end: datetime) -> bool:
+    """Did a Mon-Fri 4:05pm EST scheduled Daily Report run occur in (start, end]?"""
+    if end <= start:
+        return False
+    cursor = start.replace(hour=16, minute=5, second=0, microsecond=0)
+    if cursor <= start:
+        cursor = cursor + timedelta(days=1)
+    while cursor <= end:
+        if cursor.weekday() < 5:  # Mon-Fri
+            return True
+        cursor = cursor + timedelta(days=1)
+    return False
+
+
 def _get_cached_compare_result(symbol):
     """
     Fast-path: return the same-day daily-report entry for this symbol if available.
@@ -473,19 +512,30 @@ def _get_cached_compare_result(symbol):
 
     The daily report runs at 4:05 PM EST and stores full `predict_ticker_compare`
     results, so we can serve them instantly instead of rebuilding both models.
-    Uses a 22h freshness window — safely covers the next scheduled run.
+    Cache is valid until the next scheduled 4:05pm EST run (weekend-aware).
     """
     with _report_lock:
         gen_at = _report_cache.get("generated_at")
         data = _report_cache.get("data")
+
+    # Cold-start fallback: in-memory cache is empty, but a valid report may exist
+    # on disk. _load_latest_report_from_disk() populates _report_cache as a
+    # side-effect under its own lock; re-snapshot after.
     if not gen_at or not data:
-        return None
+        _load_latest_report_from_disk()
+        with _report_lock:
+            gen_at = _report_cache.get("generated_at")
+            data = _report_cache.get("data")
+        if not gen_at or not data:
+            return None
+
     try:
         gen_dt = datetime.fromisoformat(gen_at)
     except Exception:
         return None
-    age_hours = (datetime.now() - gen_dt).total_seconds() / 3600
-    if age_hours < 0 or age_hours >= 22:
+    # Weekend-aware freshness: cache is valid until the next scheduled
+    # 4:05pm EST run.
+    if not _is_cached_report_acceptable(gen_dt):
         return None
 
     entries = data.get('data', []) if isinstance(data, dict) else data
