@@ -122,3 +122,5 @@ Add entries here as you notice things during daily use. When a round is ready, p
 
 - **FB-2** — Verdict card expands inline beneath clicked row. Shipped Round 7a (commits 2677b36, aec5e05, 8a550ac, b118394, 090a3c4, 7edc7bb, fdb32ef, 213720e, plus structural fixes across verification rounds 1-5).
 - **FB-8** — Strategy comparison chart expands inline beneath clicked library row. Shipped Round 7a (commit 04842f2).
+- **FB-6** — Strategy Lab defaults to Daily Report symbols. Shipped Round 7b (commit 02d1636).
+- **FB-7** — Daily Report banner aggregates per-date close prices; per-row "As of" column removed. Shipped Round 7b (commits 3f68a94, cdc0a4a).
