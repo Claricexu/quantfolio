@@ -571,6 +571,22 @@
           <span id="leadersVisibleCount">&mdash;</span>
         </div>
       </div>
+      <!-- Round 7c (FB-5): Industry Group chip row, AND-combined with the
+           Sector filter above. Spec asked for the chip row "below the Sector
+           chip row"; the Sector filter is implemented as a <select> dropdown
+           rather than chips, so the new row sits immediately below the same
+           controls block, separated by a thin divider. Chips are populated
+           by populateIndustryGroupChips() and routed through the existing
+           onLeadersFilterChip() click handler via data-filter="industry_group".
+           The container DIV uses no `hidden` attribute (visibility is governed
+           by the parent #leadersControls display toggle in loadLeaders), so
+           PATTERNS.md P-1 does not apply here. -->
+      <div id="leadersIndustryGroupRow"
+           style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;
+                  margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+        <span style="font-size:10px;letter-spacing:1px;color:var(--text-muted);font-weight:600">INDUSTRY&nbsp;GROUP</span>
+        <span id="leadersIndustryGroupChips" style="display:flex;flex-wrap:wrap;gap:6px"></span>
+      </div>
     </div>
     <div id="leadersContent"></div>
   </div>
@@ -2848,7 +2864,7 @@ let _leadersLoaded = false;
 let _leadersData = null;       // full universe rows (screener_results-style)
 let _leadersSelected = null;   // Set of symbols in leaders.csv
 let _leadersMeta = null;       // {leaders_count, universe_count, leaders_mtime}
-let _leadersFilter = { sel: 'all', verdict: 'ALL', archetype: 'ALL', sector: 'ALL' };
+let _leadersFilter = { sel: 'all', verdict: 'ALL', archetype: 'ALL', sector: 'ALL', industry_group: 'ALL' };
 let _leadersSort = null;       // null = default (selected-first, score desc, mcap desc); else {col, dir}
 let _rebuildPollTimer = null;  // setInterval id for status polling
 
@@ -2955,6 +2971,7 @@ python fundamental_screener.py --universe universe_prescreened.csv --csv-out scr
 
     controls.style.display = '';
     populateSectorDropdown();
+    populateIndustryGroupChips();
     updateFilterChipCounts();
     renderLeadersTable();
     _leadersLoaded = true;
@@ -2968,21 +2985,32 @@ function _rowSector(r) {
   return broadSector(r.sic, r.sector || r.sic_description || '');
 }
 
+// Round 7c (FB-5): canonical industry_group string emitted by classifier.py
+// and written into screener_results.csv by fundamental_screener.py. Falls
+// back to an em-dash so chip aggregation never crashes on legacy CSV rows
+// that predate the column.
+function _rowIndustryGroup(r) {
+  const g = (r && r.industry_group) ? String(r.industry_group).trim() : '';
+  return g || '—';
+}
+
 function populateSectorDropdown() {
   const select = document.getElementById('leadersSectorSelect');
   if (!select || !_leadersData) return;
   const prev = select.value || 'ALL';
 
-  // Scope the option set to rows matching the OTHER active filters (sel +
-  // verdict), so the dropdown only surfaces sectors that actually have
-  // companies under the current selection. Deliberately excludes the sector
-  // filter itself — otherwise the list would collapse to one entry.
+  // Scope the option set to rows matching the OTHER active filters
+  // (sel + verdict + archetype + industry_group), so the dropdown only
+  // surfaces sectors that actually have companies under the current
+  // selection. Deliberately excludes the sector filter itself — otherwise
+  // the list would collapse to one entry.
   const f = _leadersFilter;
   const pool = _leadersData.filter(r => {
     const sym = (r.symbol || '').toUpperCase();
     if (f.sel === 'selected' && !_leadersSelected.has(sym)) return false;
     if (f.verdict !== 'ALL' && (r.verdict || '') !== f.verdict) return false;
     if (f.archetype !== 'ALL' && (r.archetype || '').toUpperCase() !== f.archetype) return false;
+    if (f.industry_group !== 'ALL' && _rowIndustryGroup(r) !== f.industry_group) return false;
     return true;
   });
 
@@ -3014,6 +3042,63 @@ function populateSectorDropdown() {
   }
 }
 
+// Round 7c (FB-5): Industry Group chip row. Mirrors populateSectorDropdown's
+// "count within the OTHER active filters" pattern — the chip pool excludes
+// the industry_group filter itself but DOES respect sel + verdict + archetype
+// + sector, so Sector=Technology + Industry Group=Semiconductors narrows
+// correctly. Re-rendered whenever any other filter changes (see callers in
+// onLeadersFilterChip and onLeadersSectorChange).
+//
+// PATTERNS.md P-2: this path replaces innerHTML on a small flex container
+// (≤ 30 chip buttons), independent of the 1,414-row leader table — no
+// synchronous layout-flush risk on the table itself.
+function populateIndustryGroupChips() {
+  const wrap = document.getElementById('leadersIndustryGroupChips');
+  if (!wrap || !_leadersData) return;
+
+  const f = _leadersFilter;
+  const pool = _leadersData.filter(r => {
+    const sym = (r.symbol || '').toUpperCase();
+    if (f.sel === 'selected' && !_leadersSelected.has(sym)) return false;
+    if (f.verdict !== 'ALL' && (r.verdict || '') !== f.verdict) return false;
+    if (f.archetype !== 'ALL' && (r.archetype || '').toUpperCase() !== f.archetype) return false;
+    if (f.sector !== 'ALL' && _rowSector(r) !== f.sector) return false;
+    return true;
+  });
+
+  const counts = new Map();
+  for (const r of pool) {
+    const g = _rowIndustryGroup(r);
+    if (!g || g === '—') continue;
+    counts.set(g, (counts.get(g) || 0) + 1);
+  }
+  const groups = Array.from(counts.keys()).sort();
+
+  // If the active industry_group filter no longer has any matches in the
+  // current pool, fall back to ALL — same graceful-degradation behavior as
+  // populateSectorDropdown so the user never gets stuck with an invisible
+  // filter.
+  if (f.industry_group !== 'ALL' && !counts.has(f.industry_group)) {
+    f.industry_group = 'ALL';
+  }
+
+  const active = f.industry_group;
+  const chips = [
+    `<button class="ldr-chip${active === 'ALL' ? ' active' : ''}"
+             data-filter="industry_group" data-value="ALL"
+             onclick="onLeadersFilterChip(this)">All
+       <span class="ldr-chip-n">(${pool.length})</span>
+     </button>`,
+  ].concat(groups.map(g =>
+    `<button class="ldr-chip${active === g ? ' active' : ''}"
+             data-filter="industry_group" data-value="${escapeHTML(g)}"
+             onclick="onLeadersFilterChip(this)">${escapeHTML(g)}
+       <span class="ldr-chip-n">(${counts.get(g)})</span>
+     </button>`
+  ));
+  wrap.innerHTML = chips.join('');
+}
+
 function updateFilterChipCounts() {
   if (!_leadersData) return;
   const total = _leadersData.length;
@@ -3033,6 +3118,7 @@ function applyLeadersFilters(rows) {
     if (f.verdict !== 'ALL' && (r.verdict || '') !== f.verdict) return false;
     if (f.archetype !== 'ALL' && (r.archetype || '').toUpperCase() !== f.archetype) return false;
     if (f.sector !== 'ALL' && _rowSector(r) !== f.sector) return false;
+    if (f.industry_group !== 'ALL' && _rowIndustryGroup(r) !== f.industry_group) return false;
     return true;
   });
 }
@@ -3208,15 +3294,21 @@ function onLeadersFilterChip(btn) {
   // Update the active class within this filter group only.
   document.querySelectorAll(`#leadersControls .ldr-chip[data-filter="${filter}"]`).forEach(b =>
     b.classList.toggle('active', b.dataset.value === value));
-  // Sector dropdown depends on the sel + verdict filters, so resync it
-  // before rendering. (populateSectorDropdown also resets the sector filter
-  // to 'ALL' if the previously-selected sector no longer has any matches.)
+  // Sector dropdown and Industry Group chips both cross-narrow with the
+  // OTHER active filters, so resync both before rendering. Each repopulator
+  // also falls back to ALL if its previously-selected value no longer has
+  // any matches in the new pool — matching populateSectorDropdown's
+  // graceful-degradation behavior.
   populateSectorDropdown();
+  populateIndustryGroupChips();
   renderLeadersTable();
 }
 
 function onLeadersSectorChange(select) {
   _leadersFilter.sector = select.value || 'ALL';
+  // Industry Group chip counts depend on the Sector filter — re-render so
+  // the post-Sector pool is reflected in chip counts (FB-5 spec).
+  populateIndustryGroupChips();
   renderLeadersTable();
 }
 
@@ -3233,7 +3325,7 @@ function onLeadersSort(col) {
 }
 
 function resetLeadersFilters() {
-  _leadersFilter = { sel: 'all', verdict: 'ALL', archetype: 'ALL', sector: 'ALL' };
+  _leadersFilter = { sel: 'all', verdict: 'ALL', archetype: 'ALL', sector: 'ALL', industry_group: 'ALL' };
   _leadersSort = null;
   // Reset chip active states.
   document.querySelectorAll('#leadersControls .ldr-chip').forEach(b => {
@@ -3242,6 +3334,10 @@ function resetLeadersFilters() {
   });
   const sel = document.getElementById('leadersSectorSelect');
   if (sel) sel.value = 'ALL';
+  // Re-render dynamic chip rows so the Industry Group pool reflects the
+  // cleared Sector filter.
+  populateSectorDropdown();
+  populateIndustryGroupChips();
   renderLeadersTable();
 }
 
