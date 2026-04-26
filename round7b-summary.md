@@ -1,8 +1,8 @@
 # Round 7b — implementation summary
 
-Branch: `agent-round7b` (2 feature commits ahead of `b52ff16`, plus this summary). Not pushed, not merged. Frontend-only, single-agent (skipper).
+Branch: `agent-round7b` (3 feature commits ahead of `b52ff16`, plus summary commits). Not pushed, not merged. Frontend-only, single-agent (skipper) plus one fix-forward.
 
-Two feedback items closed: **FB-7** (Daily Report banner aggregates per-date close prices) and **FB-6** (Strategy Lab defaults to Daily Report symbols).
+Two feedback items closed: **FB-7** (Daily Report banner aggregates per-date close prices) and **FB-6** (Strategy Lab defaults to Daily Report symbols). FB-7 took two commits — the second corrects a regression caught in owner verification.
 
 ---
 
@@ -12,8 +12,21 @@ Two feedback items closed: **FB-7** (Daily Report banner aggregates per-date clo
 |---|---|
 | `3f68a94` | feat: Daily Report banner aggregates per-date close prices; remove redundant per-row column (FB-7) |
 | `02d1636` | feat: Strategy Lab defaults to Daily Report symbols (FB-6) |
+| `cdc0a4a` | fix: remove As-of column from all three Daily Report tables (FB-7 regression) |
 
-Both commits live in `frontend/index.html` only. No backend changes. No test changes.
+All commits live in `frontend/index.html` only. No backend changes. No test changes.
+
+---
+
+## Regression and fix (FB-7 follow-up)
+
+**What the prior run got wrong.** The first FB-7 commit (`3f68a94`) declared spec point A — "remove the per-row 'As of <Date/Time>' column" — a no-op, on the basis that `buildReportRow` only emits 10 `<td>`s and none of them carry an as-of value. That was technically true at the row level but missed the rendered reality: each call to `buildReportTable` decorates the **Firm Score column header** with an `as-of-chip` showing the screener mtime. Daily Report renders three tables (High-Confidence BUY, High-Confidence SELL, All Symbols) by calling `buildReportTable` three times (lines 1469, 1473, 1482), so the chip surfaced **three times** on screen — exactly what the spec was trying to remove. Owner verification screenshot caught it.
+
+**Topology turned out to be shared, not split.** All three tables flow through the same `buildReportTable`, so the fix was a one-site removal in the shared column-list construction (line 1949). No refactor; no per-call-site special-casing.
+
+**What the fix does (`cdc0a4a`).** Replaces the conditional `firmScoreLabel` (which appended `<span class="as-of-chip">…</span>` to the header text when `_screenerComputedAt` was set) with the literal `'Firm Score'`. The `as-of-chip` CSS class, the `_screenerComputedAt` variable, and the `fmtAsOf` helper all stay — the Leader Detector chip on its VERDICT column header (~line 3122) still uses them. That chip is on a separate render path in a different tab where the new banner clause does not appear, so it remains the only on-screen freshness signal for that table and is correctly preserved.
+
+**Lesson for future rounds.** "Column doesn't exist" was reasoned from `buildReportRow` alone; the user-visible chip lives in `buildReportTable`'s header construction. When a spec says "remove the X column", verify by reading the rendered header HTML for every table that shares the render function, not just the row generator.
 
 ---
 
@@ -23,7 +36,7 @@ Both commits live in `frontend/index.html` only. No backend changes. No test cha
 
 **Implementation.** New `_buildAsOfBreakdown(data)` helper aggregates rows by `last_date`. Plugged into the existing `renderReportStatusBanner` so both call sites — fresh-fetch path (`pollReport` -> `renderReport`) and cached-load path (`loadReport` -> `renderReport`) — flow through the same banner. Single distinct date renders as `Close prices as of <Date>`; multiple dates render as comma-separated `<N> symbols' close price as of <Date>` clauses, no truncation, newest-first via lex sort on `YYYY-MM-DD`.
 
-**Spec point A — per-row "As of" column removal.** The column does not exist in the current rendered DOM. `buildReportRow` emits exactly 10 `<td>` cells aligned to the 10 `cols` defined in `buildReportTable` — Symbol, Price, Lite Chg, Lite Sig, Pro Chg, Pro Sig, Consensus, Conf, Best Strategy, Firm Score. The only "As of"-style UI on the Daily Report tab is a small `as-of-chip` rendered on the **Firm Score column header** (line 1930-1932 post-commit), which reflects `screener_results.csv` mtime — verdict freshness, NOT close-price freshness. That chip is intentionally left in place because it tracks a different freshness axis from the new banner clause. Removing a never-rendered column was a no-op; documented in the commit message body so future readers don't go hunting for the diff.
+**Spec point A — As-of decoration removal (corrected).** The first commit's "no-op" claim was wrong. `buildReportRow` emits exactly 10 `<td>` cells (Symbol, Price, Lite Chg, Lite Sig, Pro Chg, Pro Sig, Consensus, Conf, Best Strategy, Firm Score), so there is no per-row "As of" `<td>` — but `buildReportTable` decorated the Firm Score column header with an `as-of-chip` (screener mtime), and that chip rendered three times on screen because three sub-tables share the function. The follow-up commit `cdc0a4a` removes the chip from the shared header construction. See "Regression and fix" above for the full diagnostic.
 
 **Sort logic.** `SORT_KEYS` (line 1864) has no `last_date` / `as_of` key, so the (non-existent) column removal has no sort-side cost.
 
@@ -108,6 +121,12 @@ Hard-refresh after each commit before testing the next.
 2. Force a multi-date scenario by clicking **Refresh Report** while one ticker is offline / partial-fetch. Confirm the banner shows the comma-separated `<N> symbols' close price as of <Date>` form.
 3. Confirm the banner appears identically when reloading the page (cached-load path) and when refreshing the report (fresh-fetch path).
 
+**FB-7 chip removal (regression fix `cdc0a4a`):**
+4. Scroll the Daily Report tab and visually inspect the **High-Confidence BUY** table header — the Firm Score column should read just `Firm Score`, with no `As of <Date/Time>` chip beside it.
+5. Same check for the **High-Confidence SELL** table header.
+6. Same check for the **All Symbols** table header.
+7. Switch to the Leader Detector tab — the VERDICT column header SHOULD still carry its `As of <Date/Time>` chip (different render path, intentionally preserved).
+
 **FB-6 filter:**
 1. Open Strategy Lab with a current Daily Report cached: only DR symbols visible; status reads `Filtered to N of M symbols (current Daily Report)`; notice hidden.
 2. Restart the server, open Strategy Lab BEFORE Daily Report: filter still applies if `dual_report_*.json` exists on disk (cold-start fallback path).
@@ -133,4 +152,4 @@ Full output: `tests/unit/run_all.py` ran cleanly via `C:\Users\xkxuq\miniconda3\
 
 ## Session end
 
-Two features shipped, two commits on `agent-round7b`. Branch is ready for owner verification round 7, then merge to `main`. No backend changes; no test changes; Round 7a inline-expansion behavior preserved on Daily Report verdict card AND Strategy Lab strategy chart.
+Two features shipped across three commits on `agent-round7b` (FB-7 banner aggregation, FB-6 Strategy Lab default filter, FB-7 chip-removal regression fix). Branch is ready for owner verification round 7 retest of the chip-removal cases, then merge to `main`. No backend changes; no test changes; Round 7a inline-expansion behavior preserved on Daily Report verdict card AND Strategy Lab strategy chart.
