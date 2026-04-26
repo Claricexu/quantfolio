@@ -79,7 +79,21 @@ Add entries here as you notice things during daily use. When a round is ready, p
 
 ## Small tweaks (quick wins)
 
-*(none yet — add as they come up)*
+### FB-9 — User Guide: missing-behavior gaps from Round 7a docs sync
+
+**Requested:** 2026-04-25 (sophia review of doc-sync-round7a)
+
+**What's missing in USER_GUIDE.md after Round 7a docs sync:**
+- Parts 4/5/6 describe inline expansion but don't mention the modal-overlay fallback that engages below ~640px viewport. Tablet and narrow-window users will be surprised.
+- Parts 4/5/6 say the card "expands" on click but don't mention the loading skeleton that appears for uncached Leader Detector tickers. First-time users may think their click didn't register.
+
+**Proposed:** Add a half-sentence to each of Parts 4, 5, and 6 covering both behaviors. Aim for ~10 added words per part, total ~30 words across the three sections.
+
+**Estimated effort:** 15-20 minutes.
+
+**Suggested timing:** fold into next doc sync round, or as warm-up for any future UI-touching round on those tabs.
+
+**Related:** Round 7a verification rounds 1-5; sophia review of commit 519fb4f.
 
 ---
 
