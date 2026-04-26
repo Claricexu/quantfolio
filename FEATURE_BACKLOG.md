@@ -120,4 +120,5 @@ Add entries here as you notice things during daily use. When a round is ready, p
 
 ## Shipped
 
-*(empty — will populate as features land)*
+- **FB-2** — Verdict card expands inline beneath clicked row. Shipped Round 7a (commits 2677b36, aec5e05, 8a550ac, b118394, 090a3c4, 7edc7bb, fdb32ef, 213720e, plus structural fixes across verification rounds 1-5).
+- **FB-8** — Strategy comparison chart expands inline beneath clicked library row. Shipped Round 7a (commit 04842f2).
