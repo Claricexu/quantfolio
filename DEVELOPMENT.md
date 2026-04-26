@@ -47,6 +47,7 @@ Finance/
 │   ├── fundamental_metrics.py    # Phase 1.3a — 15 metric computations
 │   ├── fundamental_screener.py   # Phase 1.3b — archetype classifier + verdicts
 │   ├── verdict_provider.py       # Single-source-of-truth loader for screener_results.csv (Bucket 2)
+│   ├── classifier.py             # Round 7c — leaf module, sector/industry_group/industry from SIC + ticker overrides
 │   ├── leader_selector.py        # Phase 1.4 — writes leaders.csv
 │   └── prescreen_rules.json      # Prescreen thresholds (6 rules, tunable config)
 │
@@ -85,6 +86,7 @@ Finance/
 - **The bridge:** [`get_all_symbols()`](finance_model_v2.py:146) in `finance_model_v2.py` reads `leaders.csv ∪ Tickers.csv` and exposes the 174-symbol universe to Layer 2.
 - **BacktestEngine ([`backtest_engine.py`](backtest_engine.py)):** One walk-forward simulator shared by `predict_ticker`, `backtest_symbol`, and `backtest_multi_strategy`. Before Round 3 each caller had its own loop with different guards and different ensemble builders — same ticker could report different Sharpe. Now: one `BacktestConfig` → one `run(strategy_fn)` call path → one `config_hash` (SHA-256) that changes whenever training does. `MIN_ZSCORE_SAMPLES` is enforced inside the engine, not the callers. Only `ensemble_builder='oof'` is supported; the legacy val-MAE `fast` builder was deleted in C-3 Phase 5. See [round3-summary.md](round3-summary.md) for the full refactor.
 - **Verdict loader ([`verdict_provider.py`](verdict_provider.py)):** Single source of truth for fundamental verdicts across all four tabs. Reads `screener_results.csv` with an mtime-keyed in-process cache so Lookup / Report / Leader surfaces can never disagree (Round 2 C-1).
+- **Classifier ([`classifier.py`](classifier.py), Round 7c):** The classification pipeline derives `(sector, industry_group, industry)` from SIC codes via `classifier.py`, with hard-coded `TICKER_OVERRIDES` for mega-caps whose SIC codes misrepresent their actual business (GOOGL/META/NFLX → Telecom & Media, AMZN → Retail, AAPL → Tech Hardware, TSLA → Autos, V/MA → Payments). Leaf module — standard library only, no imports from app modules — so the screener, the verdict loader, and any future consumer can pull canonical classification without coupling. Lookup is a `bisect_right` over `SIC_RANGES`; an import-time invariant fails loudly on overlapping or out-of-order ranges.
 
 ---
 
