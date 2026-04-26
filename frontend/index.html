@@ -490,6 +490,26 @@
       </div>
       <button class="btn-sm" onclick="runBatchBacktest()" id="btnBatch">Run All Backtests</button>
     </div>
+    <!-- Round 7b / FB-6: notice shown when no Daily Report data is available.
+         Hidden by default (no notice in the common case where Daily Report has
+         been loaded). Reuses .app-banner family styling; per PATTERNS.md P-1
+         the .app-banner[hidden] companion rule is already present so el.hidden
+         toggling works. -->
+    <div id="libNoReportNotice" class="app-banner" role="status" hidden>
+      <div class="ab-body">
+        No Daily Report data yet &mdash; showing all cached backtest symbols. Run Daily Report first for a focused list.
+      </div>
+    </div>
+    <!-- Round 7b / FB-6: override toggle. Off by default (filter to Daily
+         Report symbols when available); checking it bypasses the filter for
+         the current session only. State is intentionally NOT persisted: a
+         page reload returns to the default filtered view. -->
+    <div id="libFilterRow" style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:12px;color:var(--text-muted)">
+      <input type="checkbox" id="libShowAll" onchange="onLibShowAllChange()"
+             style="cursor:pointer;accent-color:var(--blue-light)">
+      <label for="libShowAll" style="cursor:pointer">Show all symbols</label>
+      <span id="libFilterStatus" style="margin-left:auto;font-size:11px;color:var(--text-faint)"></span>
+    </div>
     <div id="batchStatus"></div>
     <div id="libCallout"></div>
     <p class="search-hint">Click a row to view its equity curve.</p>
@@ -1371,6 +1391,12 @@ function renderReport(json) {
   const el = document.getElementById('reportContent');
   const statusEl = document.getElementById('reportStatus');
 
+  // Round 7b / FB-6: stash the symbol set so Strategy Lab can filter to
+  // "symbols in the current Daily Report" without re-fetching /api/report.
+  // Captured BEFORE the SELL-downgrade transform because membership is
+  // independent of signal -- a row is in the report iff it was scanned.
+  _setDailyReportSymbols(rawData);
+
   // C-2: downgrade SELL rows whose best strategy is NOT Full Signal before
   // any rendering. `data` from here on is the post-filter view that users see.
   const dg = downgradeSells(rawData, _bestStratMap);
@@ -2199,46 +2225,189 @@ function renderStrategyStats(data, targetId) {
 //  STRATEGY LAB
 // =================================================================
 let _libChart = null;
-let _libData = null;
+let _libData = null;       // currently displayed (post-filter) library payload
+let _libDataAll = null;    // raw /api/backtest-library payload (pre-filter)
 let _batchPollTimer = null;
 let _libItems = [];
 let _libSortState = { key: null, asc: true };
+// Round 7b / FB-6: symbols present in the most recent Daily Report.
+//   - null  = unknown (haven't tried to load)
+//   - Set() = known empty (no Daily Report on disk / tab not opened)
+//   - Set(...) = the symbol set to filter against
+// Lifetime is the page load. renderReport() refreshes this whenever the
+// Daily Report tab renders; loadLibrary() lazily populates it from the
+// cached /api/report payload if Strategy Lab opens first.
+let _dailyReportSymbols = null;
+
+function _setDailyReportSymbols(rows) {
+  if (!Array.isArray(rows)) {
+    _dailyReportSymbols = new Set();
+    return;
+  }
+  const s = new Set();
+  for (const r of rows) {
+    if (r && r.symbol) s.add(String(r.symbol).toUpperCase());
+  }
+  _dailyReportSymbols = s;
+}
+
+// Pull /api/report (cached, no refresh trigger) so Strategy Lab can filter
+// even when the user opens this tab BEFORE the Daily Report tab. The
+// backend's _load_latest_report_from_disk fallback means a fresh server
+// + cached dual_report_*.json on disk is enough -- no scan needed.
+// Always returns: never throws into the caller's flow. Safe to await.
+async function _ensureDailyReportSymbols() {
+  if (_dailyReportSymbols !== null) return; // already populated (possibly empty)
+  try {
+    const res = await fetchTimeout(`${API_BASE}/api/report`, 30000);
+    if (!res.ok) { _dailyReportSymbols = new Set(); return; }
+    const json = await res.json();
+    const rows = (json && json.data && json.data.data) ? json.data.data : null;
+    _setDailyReportSymbols(rows);
+  } catch (_) {
+    _dailyReportSymbols = new Set();
+  }
+}
+
+// Returns the items to display given the raw list and the current toggle
+// + Daily Report state. Three branches:
+//   - "Show all symbols" toggle ON -> bypass filter, show all.
+//   - Daily Report symbols available -> filter to that set.
+//   - Daily Report symbols missing/empty -> fall back to all (notice surfaces).
+function _filterLibraryItems(rawItems) {
+  if (!Array.isArray(rawItems)) return [];
+  const showAllChk = document.getElementById('libShowAll');
+  const showAll = !!(showAllChk && showAllChk.checked);
+  if (showAll) return rawItems.slice();
+  if (!_dailyReportSymbols || _dailyReportSymbols.size === 0) {
+    return rawItems.slice(); // fallback: notice will be visible
+  }
+  return rawItems.filter(it => it && it.symbol && _dailyReportSymbols.has(String(it.symbol).toUpperCase()));
+}
+
+// Render the Strategy Lab UI given the raw library payload, the current
+// filter state, and the current Daily Report state. Single source of truth
+// for "what does Strategy Lab look like right now" so initial-load,
+// toggle-change, and post-batch-rebuild paths all reach the same place.
+function _renderLibraryWithFilter() {
+  if (!_libDataAll) return;
+  const tableWrap = document.getElementById('libTableWrap');
+  const callout = document.getElementById('libCallout');
+  const notice = document.getElementById('libNoReportNotice');
+  const filterRow = document.getElementById('libFilterRow');
+  const status = document.getElementById('libFilterStatus');
+  const showAllChk = document.getElementById('libShowAll');
+  const showAll = !!(showAllChk && showAllChk.checked);
+
+  const rawItems = (_libDataAll.data || []);
+  const haveReport = !!(_dailyReportSymbols && _dailyReportSymbols.size > 0);
+  const filteredItems = _filterLibraryItems(rawItems);
+
+  // Notice: only when filter would otherwise apply but no Daily Report data.
+  // Toggling "Show all symbols" doesn't itself surface the notice -- the
+  // notice is about the absence of the data source, not the active mode.
+  if (notice) notice.hidden = haveReport;
+
+  // Filter status copy near the toggle. Hides during the empty-library
+  // skeleton path below to avoid a confusing "0 of 0" line.
+  if (status) {
+    if (rawItems.length === 0) {
+      status.textContent = '';
+    } else if (showAll) {
+      status.textContent = `Showing all ${rawItems.length} cached symbols.`;
+    } else if (haveReport) {
+      status.textContent = `Filtered to ${filteredItems.length} of ${rawItems.length} symbols (current Daily Report).`;
+    } else {
+      status.textContent = `Showing all ${rawItems.length} cached symbols (no Daily Report data).`;
+    }
+  }
+
+  // Hide the toggle row entirely when the library is empty -- the skeleton
+  // already explains the state and a stray checkbox would be confusing.
+  if (filterRow) filterRow.style.display = (rawItems.length === 0) ? 'none' : '';
+
+  // Build a payload for the existing renderers using the filtered items.
+  // Cloning preserves the rest of the response (batch_running, symbols_total,
+  // etc.) without mutating _libDataAll.
+  const json = Object.assign({}, _libDataAll, { data: filteredItems });
+  _libData = json;
+
+  if (filteredItems.length > 0) {
+    renderLibraryCallout(json);
+    renderLibraryTable(json);
+  } else if (rawItems.length > 0 && !showAll && haveReport) {
+    // Daily Report has symbols but zero overlap with the cached library.
+    // Surface this honestly instead of an empty table; the toggle is the
+    // user's escape hatch.
+    callout.innerHTML = '';
+    tableWrap.innerHTML = `
+      <div class="skeleton-empty" role="status" aria-live="polite"
+           aria-label="No overlap between Daily Report symbols and cached backtests">
+        <div class="se-title">No cached backtests for current Daily Report symbols</div>
+        <div class="se-body">
+          None of the ${_dailyReportSymbols.size} symbols in the current Daily Report
+          have a cached backtest yet. Check <strong>Show all symbols</strong> above to
+          see the full library, or run a batch backtest.
+        </div>
+      </div>`;
+  } else {
+    // Empty library: H-11 honest-timing skeleton (unchanged copy).
+    callout.innerHTML = '';
+    const lsLab = (_libDataAll.symbols_total) || STRATEGY_LAB_TICKER_COUNT;
+    tableWrap.innerHTML = `
+      <div class="skeleton-empty" role="status" aria-live="polite"
+           aria-label="No backtests cached yet, first run takes about 1 to 3 hours">
+        <div class="se-title">No backtests cached yet</div>
+        <div class="se-body">
+          Running all strategies across <strong>${lsLab}</strong> tickers takes
+          about <span class="se-time">1&ndash;3 hours</span> the first time;
+          already-tested tickers are skipped on later runs, so repeat batches
+          finish in <span class="se-time">~10 min</span>. Safe to close the tab
+          &mdash; it runs in the background.
+        </div>
+      </div>`;
+  }
+}
+
+// Toggle handler. Re-renders the table in place using cached data; no
+// network. closeDetail() is implicit via renderLibraryTable -> sortLibraryTable
+// -> tbody innerHTML rewrite (the existing closeDetail() call inside
+// sortLibraryTable handles open detail-rows on Strategy Lab).
+function onLibShowAllChange() {
+  // Round 7a / FB-8: any open inline chart card on Strategy Lab points at
+  // a row in the about-to-be-rewritten tbody. Closing first keeps openDetail
+  // state in sync with the DOM. sortLibraryTable already does this on
+  // re-sort; doing it here keeps the toggle path symmetric.
+  if (typeof closeDetail === 'function') closeDetail();
+  _renderLibraryWithFilter();
+}
 
 async function loadLibrary() {
   const tableWrap = document.getElementById('libTableWrap');
   const callout = document.getElementById('libCallout');
 
-  // Don't reload if data already present
-  if (_libData && _libData.data && _libData.data.length > 0) return;
+  // Don't reload if data already present. Still re-apply the filter so
+  // downstream changes (e.g. Daily Report just refreshed) take effect on
+  // tab switch back.
+  if (_libDataAll && _libDataAll.data && _libDataAll.data.length > 0) {
+    await _ensureDailyReportSymbols();
+    _renderLibraryWithFilter();
+    return;
+  }
 
   tableWrap.innerHTML = loaderHTML('Loading backtest library\u2026');
   callout.innerHTML = '';
 
   try {
-    const res = await fetchTimeout(`${API_BASE}/api/backtest-library`);
+    // Round 7b / FB-6: pull library + Daily Report symbols in parallel.
+    // _ensureDailyReportSymbols is best-effort and never throws into here.
+    const [res] = await Promise.all([
+      fetchTimeout(`${API_BASE}/api/backtest-library`),
+      _ensureDailyReportSymbols(),
+    ]);
     const json = await res.json();
-    _libData = json;
-
-    if (json.data && json.data.length > 0) {
-      renderLibraryCallout(json);
-      renderLibraryTable(json);
-    } else {
-      callout.innerHTML = '';
-      // H-11: honest-timing skeleton empty state; role=status for screen readers.
-      const lsLab = json.symbols_total || STRATEGY_LAB_TICKER_COUNT;
-      tableWrap.innerHTML = `
-        <div class="skeleton-empty" role="status" aria-live="polite"
-             aria-label="No backtests cached yet, first run takes about 1 to 3 hours">
-          <div class="se-title">No backtests cached yet</div>
-          <div class="se-body">
-            Running all strategies across <strong>${lsLab}</strong> tickers takes
-            about <span class="se-time">1&ndash;3 hours</span> the first time;
-            already-tested tickers are skipped on later runs, so repeat batches
-            finish in <span class="se-time">~10 min</span>. Safe to close the tab
-            &mdash; it runs in the background.
-          </div>
-        </div>`;
-    }
+    _libDataAll = json;
+    _renderLibraryWithFilter();
 
     // If a batch is already running, reflect that
     const btn = document.getElementById('btnBatch');
@@ -2650,6 +2819,7 @@ function pollBatchStatus() {
 
         // Reload library data
         _libData = null;
+        _libDataAll = null;  // Round 7b / FB-6: also clear raw cache so loadLibrary refetches
         loadLibrary();
       }
     } catch (_) {
