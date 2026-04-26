@@ -101,6 +101,34 @@ function closeDetail() {
 
 ---
 
+### P-3 — Avoid multi-line here-strings in PowerShell git commit messages
+
+**Pattern:** When committing on Windows via PowerShell, use single-line commit messages (`git commit -m "message"`) rather than multi-line here-strings (`git commit -m @'...'@`). Put longer explanations in summary documents instead of commit message bodies.
+
+**Why it matters:** PowerShell parses multi-line here-strings differently than bash heredocs. Long messages with backticks, colons, or specific quoting can fail in ways that make git interpret message fragments as additional pathspecs, producing errors like `error: pathspec 'of' did not match any file(s) known to git`. The error obscures the actual cause.
+
+**Where this has bitten:**
+- Round 7b regression-fix commit on 2026-04-25 — multi-line here-string failed PowerShell quoting and produced cryptic pathspec errors. Recovered with a single-line message.
+
+**Prompt template for future agent rounds:**
+
+> "Use single-line `git commit -m \"...\"` messages when committing in PowerShell on Windows. For longer explanations, put them in summary documents (round*-summary.md, CHANGELOG.md) instead of commit message bodies. Reference PATTERNS.md P-3."
+
+### P-4 — Trace caller chains, not just function bodies
+
+**Pattern:** When patching a "shared render path" or any function that's called from multiple sites, examine the calling functions that wrap or decorate the rendered output, not just the function being patched. A render function may correctly emit data with no extra decoration; the caller that invokes it three times may be decorating the result each time.
+
+**Why it matters:** "I traced this function and it looks correct" is necessary but not sufficient. The function may be one component of a larger rendering pipeline. The bug may be in a wrapper, a sibling, or the chain of decorators around the function being patched.
+
+**Where this has bitten:**
+- Round 7b FB-7 regression — `buildReportRow` correctly emitted no as-of-chip in row data, but `buildReportTable` (which calls `buildReportRow` three times for High-Confidence BUY, SELL, and All Symbols) decorated each table's column header with the chip. The shared header construction was the actual bug site, not the row renderer.
+
+**Prompt template for future agent rounds:**
+
+> "When patching a render function, trace at least one level above (the callers) and at least one level below (the children). The bug may be in a wrapper or a sibling, not the function being patched. Reference PATTERNS.md P-4."
+
+---
+
 ## Backend / Python
 
 *(none yet — add as they come up)*
