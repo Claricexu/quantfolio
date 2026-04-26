@@ -21,6 +21,7 @@ from tests.unit import (
     test_edgar_fetcher_http,
     test_yfinance_http,
     test_predict_ticker_warnings,
+    test_classifier,
 )
 
 
@@ -35,6 +36,7 @@ def main() -> int:
         ("test_edgar_fetcher_http", test_edgar_fetcher_http),
         ("test_yfinance_http", test_yfinance_http),
         ("test_predict_ticker_warnings", test_predict_ticker_warnings),
+        ("test_classifier", test_classifier),
     ):
         print(f"\n=== {name} ===")
         fails = mod.run_all()
