@@ -24,6 +24,7 @@ import json
 from pathlib import Path
 from statistics import median
 
+from classifier import classify
 from fundamental_metrics import compute_metrics
 from edgar_fetcher import load_tickers_from_csv, get_db, _load_universe_symbols
 
@@ -235,6 +236,20 @@ def score_ticker(metrics):
     verdict. Phase 1.9: routes through the MATURE or GROWTH rubric based
     on `classify_archetype(m)`."""
     m = dict(metrics)
+
+    # Round 7c: derive canonical (sector, industry_group, industry) via
+    # classifier.classify. The existing `sector` field arrives from
+    # fundamental_metrics holding the SIC description string; we overwrite
+    # it with the classifier sector here so downstream code (CSV row,
+    # verdict_provider, frontend) reads canonical sector everywhere. The
+    # SIC description is forwarded to classify() as the third arg purely
+    # for forward-compat with future tie-breaker rules.
+    _sector, _industry_group, _industry = classify(
+        m.get('symbol'), m.get('sic'), m.get('sector')
+    )
+    m['sector'] = _sector
+    m['industry_group'] = _industry_group
+    m['industry'] = _industry
 
     archetype = classify_archetype(m)
     if archetype == 'GROWTH':
@@ -465,6 +480,13 @@ CSV_OUT_FIELDS = [
     # these. Empty strings on legacy rows -> renders as dashes (graceful
     # degradation via testDot(None) and flagChips on {}).
     'tests_json', 'dealbreakers_json',
+    # Round 7c (FB-1 data half): canonical industry_group + industry from
+    # classifier.classify. The existing `sector` column above (kept in name
+    # and order) is now also populated with the classifier sector instead of
+    # the raw SIC description — this is a data quality fix without a
+    # schema-position change. Two new columns appended; no existing column
+    # renamed or reordered.
+    'industry_group', 'industry',
 ]
 
 

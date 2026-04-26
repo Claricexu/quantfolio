@@ -29,6 +29,14 @@ the UI can distinguish:
                             ``tests_known < 3`` (not enough reported
                             quarters yet).
 
+Round 7c (FB-1 data half) — the screener CSV now carries canonical
+``sector``, ``industry_group`` and ``industry`` columns produced by
+``classifier.classify``. They flow through this loader unchanged because
+``_coerce_row`` is shape-agnostic for unknown columns (only the explicitly
+typed ``_FLOAT_COLS`` / ``_INT_COLS`` / ``_BOOL_COLS`` get coerced). No
+re-classification happens here — the screener writes them once and we
+surface what's on disk.
+
 Public API
 ----------
     load_screener_index()           -> dict[symbol -> row]  (mtime-cached)
