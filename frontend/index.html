@@ -1464,6 +1464,38 @@ function renderReport(json) {
 // future server path could regress to a non-parseable format and the UI
 // used to happily render "Invalid Date" in that case. Instead we render
 // an actionable "click Refresh Report" fallback using the approved copy.
+//
+// Round 7b / FB-7: the banner also surfaces a per-`last_date` breakdown of
+// the rendered rows. Single distinct date renders as "Close prices as of
+// <Date>"; multiple dates render as a comma-separated list with per-date
+// counts ("<N1> symbols' close price as of <Date1>, …"). The aggregate is
+// computed client-side from each row's `last_date` field (set by
+// finance_model_v2.py:_predict_ticker, surfaced verbatim by /api/report).
+// Both the fresh-fetch path (pollReport → renderReport) and the cached-
+// load path (loadReport → renderReport) flow through this single helper,
+// so the banner stays correct regardless of source.
+function _buildAsOfBreakdown(data) {
+  if (!Array.isArray(data) || data.length === 0) return '';
+  const counts = new Map();
+  for (const r of data) {
+    if (!r) continue;
+    const d = r.last_date;
+    if (!d) continue;
+    counts.set(d, (counts.get(d) || 0) + 1);
+  }
+  if (counts.size === 0) return '';
+  if (counts.size === 1) {
+    const [date] = counts.keys();
+    return `Close prices as of ${date}`;
+  }
+  // Multiple distinct dates — newest first so the most recent close price
+  // leads the list. ISO YYYY-MM-DD strings sort lexicographically.
+  const entries = Array.from(counts.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+  return entries
+    .map(([date, n]) => `${n} symbols' close price as of ${date}`)
+    .join(', ');
+}
+
 function renderReportStatusBanner(statusEl, generatedAt, summary, data) {
   if (!statusEl) return;
   let dt = null;
@@ -1473,8 +1505,11 @@ function renderReportStatusBanner(statusEl, generatedAt, summary, data) {
   }
   if (dt) {
     const timeStr = dt.toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+    const symbolCount = summary.total_symbols || data.length;
+    const asOfClause = _buildAsOfBreakdown(data);
+    const tail = asOfClause ? ` | ${asOfClause}` : '';
     statusEl.innerHTML = `<div class="scan-banner" style="border-color:var(--green-border)">
-      Report generated: ${timeStr} | ${summary.total_symbols || data.length} symbols analyzed</div>`;
+      Report generated: ${timeStr} | ${symbolCount} symbols analyzed${tail}</div>`;
   } else {
     // Exact copy approved by reviewers (C-12 fallback).
     statusEl.innerHTML = `<div class="scan-banner" style="border-color:var(--yellow-border);color:var(--yellow-text)">
