@@ -38,6 +38,69 @@ Add entries as patterns emerge. When writing prompts for future agent rounds, re
 
 ---
 
+### P-2 — Avoid synchronous layout flushes after mutating the leader table
+
+**Pattern:** After DOM mutations to the Leader Detector table (1,414 rows × 9 columns at current universe size), avoid synchronous calls that force browser layout recomputation — `focus()`, `scrollIntoView()`, `getBoundingClientRect()`, or reads of layout properties like `offsetTop`, `offsetHeight`, `clientWidth`. Defer any unavoidable layout-touching work to `requestAnimationFrame` so the browser can batch reflows.
+
+**Why it matters:** When a row is inserted or removed from a large table, Blink (Chromium's rendering engine) marks the table's layout as dirty but defers actual recomputation until something forces a flush. Layout-reading APIs and certain layout-affecting APIs (`focus()` on an element with potential scroll-into-view side effects, `scrollIntoView()` itself) force the browser to synchronously recompute layout for the entire table — re-measuring all 12,700 cells in the leader table at current size. This blocks the main thread for hundreds of milliseconds to several seconds on consumer hardware, manifesting as a UI freeze that also stutters other applications competing for CPU.
+
+The bug class is invisible during code review because each individual `focus()` or `scrollIntoView()` call looks innocuous. The cost only emerges when the call site sits in the dirty-layout window between a DOM mutation and the next natural reflow.
+
+**Correct:**
+
+```javascript
+// Mutate first, defer layout-touching work to next frame
+function openSymbolDetail(row) {
+  const detailRow = createDetailRow();
+  row.insertAdjacentElement('afterend', detailRow);
+  // Layout-touching work deferred — browser flushes naturally between frames
+  requestAnimationFrame(() => {
+    detailRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  });
+}
+```
+
+```javascript
+// Same fix on the close path — no synchronous layout flush after removeChild
+function closeDetail() {
+  const detailRow = document.querySelector('.detail-row');
+  if (!detailRow) return;
+  detailRow.parentNode.removeChild(detailRow);
+  // No focus(), no scrollIntoView() here — let layout settle naturally
+}
+```
+
+**Incorrect:**
+
+```javascript
+function openSymbolDetail(row) {
+  const detailRow = createDetailRow();
+  row.insertAdjacentElement('afterend', detailRow);
+  detailRow.scrollIntoView();          // forces sync layout flush of 12,700 cells
+  detailRow.querySelector('input').focus();  // second sync flush
+}
+```
+
+```javascript
+function closeDetail() {
+  const detailRow = document.querySelector('.detail-row');
+  if (!detailRow) return;
+  detailRow.parentNode.removeChild(detailRow);
+  symCell.focus({ preventScroll: true });  // even with preventScroll, this forces a layout flush
+}
+```
+
+**Where this has bitten:**
+
+- Round 7a verification round 4 — `openSymbolDetail` had pre-fetch `focus()` + `scrollIntoView()` calls that fired before the verdict fetch resolved, causing a multi-second freeze on every Leader Detector row click. Fixed in commit `fdb32ef` by dropping the pre-fetch calls; only one rAF-scheduled `scrollIntoView()` remains, after the fetch completes.
+- Round 7a verification round 5 — `closeDetail` had a post-mutation `symCell.focus({preventScroll:true})` that was functionally a no-op (the cell had no `tabindex`) but still forced a layout flush. Removed in commit `7edc7bb`. Closing the detail row now batches naturally with the next animation frame.
+
+**Prompt template for future rounds touching the leader table or any large list view:**
+
+> "When mutating rows in the leader table or any list-style table with hundreds of rows, avoid synchronous layout-flush operations (`focus()`, `scrollIntoView()`, `getBoundingClientRect()`, reads of `offsetTop` / `offsetHeight` / `clientWidth`) immediately after DOM changes. Defer non-critical layout work to `requestAnimationFrame`. Reference PATTERNS.md P-2. The bug from Round 7a verification rounds 4 and 5 cost ~5 hours of debug-and-patch time; do not let it recur."
+
+---
+
 ## Backend / Python
 
 *(none yet — add as they come up)*

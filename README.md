@@ -46,15 +46,15 @@ index.html             <-->  api_server.py       -->    Lite model (RF + XGBoost
 Enter a symbol and click **Predict**. Shows a Lite-vs-Pro side-by-side prediction with predicted price, percent change, signal (BUY/SELL/HOLD), consensus + confidence, SVR valuation, per-model sub-predictions, and best backtest strategy with Sharpe ratio.
 
 ### Daily Report
-Auto-generated at 4:05 PM EST on trading days. Sortable table with columns: Symbol, Price, Change, Lite Signal, Pro Signal, Consensus, Confidence, Best Strategy. Click any column header to sort. Color-coded signals and confidence levels.
+Auto-generated at 4:05 PM EST on trading days. Sortable table with columns: Symbol, Price, Change, Lite Signal, Pro Signal, Consensus, Confidence, Best Strategy. Click any column header to sort. Click any row to expand the verdict card inline beneath that row. Color-coded signals and confidence levels.
 
 ### Strategy Lab
 - **Run Batch Backtest** — Backtests all tickers with 5 strategies (Buy & Hold, Lite Buy-Only, Lite Full, Pro Buy-Only, Pro Full). Skips tickers with fresh cached results (< 7 days).
 - **Library Table** — Sortable results showing best strategy, Sharpe ratio, total return, max drawdown, and Sharpe vs B&H delta for every ticker.
-- **Equity Curve Viewer** — Click any ticker row to load its interactive Chart.js equity curve with all 5 strategy lines color-coded.
+- **Equity Curve Viewer** — Click any ticker row in the library to expand its interactive Chart.js equity curve inline beneath the clicked row, with all 5 strategy lines color-coded.
 
 ### Leader Detector
-- **Universe Viewer** — Sortable table of all 1,414 prescreened symbols. Columns: Symbol, Name, Sector, Market Cap, Verdict, Good Firm Score, Archetype, Sector Rank, Selected (✓ if in `leaders.csv`).
+- **Universe Viewer** — Sortable table of all 1,414 prescreened symbols. Columns: Symbol, Name, Sector, Market Cap, Verdict, Good Firm Score, Archetype, Sector Rank, Selected (✓ if in `leaders.csv`). Click any row to expand the verdict card inline beneath that row.
 - **Filter Chips** — VERDICT (All / Leader / Gem / Watch / Avoid), ARCHETYPE (All / Growth / Mature), and a SECTOR dropdown populated from the live dataset.
 - **Rebuild Now** — Kicks off the Layer 1 pipeline (`universe_builder.py` → `edgar_fetcher.py` → `fundamental_screener.py` → `leader_selector.py`). Warm rebuild ≈ 10 min; cold rebuild ≈ 3.5 hr (SEC EDGAR rate-limits at 10 req/sec).
 - **Download CSV** — Export the currently filtered view for offline analysis.

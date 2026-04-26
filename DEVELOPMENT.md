@@ -29,6 +29,7 @@ This guide assumes you already know Python, pandas, scikit-learn, and have read 
 ```
 Finance/
 ├── api_server.py                 # FastAPI entry point + APScheduler crons + email alerts
+│                                  # Cache-freshness helpers: `_is_cached_report_acceptable`, `_scheduled_run_occurred_between`
 ├── start_dashboard.bat           # Windows one-click launcher (activates conda, runs api_server)
 ├── frontend/index.html           # Entire dashboard UI (single file, no build step)
 │
@@ -151,7 +152,7 @@ Both run in the in-process `BackgroundScheduler`. If APScheduler isn't installed
 | Cache | TTL | Location | Invalidated by |
 |---|---|---|---|
 | Price CSVs | Per trading day | `data_cache/*.csv` | Delete the file to force re-fetch |
-| Daily report (in-memory) | None at `/api/report` (serves whatever's newest); 22 h on the Ticker Lookup fast-path | `_report_cache` dict + `data_cache/dual_report_<YYYYMMDD_HHMM>.json` on disk | `?refresh=true` on `/api/report` kicks a background rerun; disk file is rewritten after each scan |
+| Daily report (in-memory) | None at `/api/report` (serves whatever's newest); on the Ticker Lookup fast-path, the cache is acceptable until the next scheduled Daily Report run fires (22 h short-circuit for the common weekday path; otherwise a calendar walk over the Mon–Fri 4:05 PM EST cron) | `_report_cache` dict + `data_cache/dual_report_<YYYYMMDD_HHMM>.json` on disk | `?refresh=true` on `/api/report` kicks a background rerun; disk file is rewritten after each scan |
 | Backtest JSONs | 7 days | `data_cache/backtest_chart_<SYMBOL>.json` | `?refresh=true` on `/api/backtest-chart/{symbol}` |
 | Fundamental verdicts | mtime-keyed (CSV change = automatic invalidation) | In-process `verdict_provider._cache_state` over `screener_results.csv` | Any rewrite of `screener_results.csv` (e.g. `fundamental_screener.py --all` or a Layer 1 rebuild) |
 | SEC XBRL facts | 90 days | `fundamentals.db` (SQLite, WAL mode) | `edgar_fetcher.py --refresh` |
@@ -159,7 +160,14 @@ Both run in the in-process `BackgroundScheduler`. If APScheduler isn't installed
 
 `data_cache/` is gitignored and auto-created at launch.
 
-**Known gap (audit H-2):** `/api/report` does not apply a TTL to the disk-loaded report on startup, so after a long weekend the dashboard can serve Friday's report as "today." The 22 h TTL lives only on `_get_cached_compare_result()` (the Ticker Lookup same-day fast-path).
+**Ticker Lookup fast-path freshness (Round 7a, `3d1fbae`):** `_get_cached_compare_result` calls `_is_cached_report_acceptable(report_timestamp)`, which:
+
+1. Short-circuits to True when the cache is < 22 h old (covers the common weekday path so we don't pay the schedule walk on every request).
+2. Otherwise asks "has any Mon–Fri 4:05 PM `America/New_York` scheduled run fired between the cache timestamp and now?" via `_scheduled_run_occurred_between`. If no scheduled run has occurred in that window, the cache IS the freshest available and is accepted. This is what keeps Friday's report valid through the weekend.
+3. Cold-start fallback: when `_report_cache["data"]` is empty, calls `_load_latest_report_from_disk()` and re-snapshots before the freshness check, so a server restart doesn't force a fresh ~50 s recompute when a recent report exists on disk.
+4. Future-dated caches (NTP skew, manual clock change) return False — Wright-required clock-skew guard.
+
+**Latent timezone bug — file before any non-EST deployment.** Timestamps in `_run_dual_report` and `_load_latest_report_from_disk` are currently naive; the freshness helper assumes naive = `America/New_York`. Correct on the user's Windows EST machine; non-EST deployment requires a 4-line fix in those two write sites (`datetime.now(tz=ZoneInfo("America/New_York"))`).
 
 ---
 

@@ -127,7 +127,7 @@ This is where you check a single ticker on demand.
 2. Click **Predict** (or press Enter)
 3. Wait a few seconds — the first time you look up a ticker, both models need to train
 
-If that ticker was already processed by today's Daily Report, you'll see a small green **CACHED** pill next to the "Through" date, and the result appears almost instantly (~50ms instead of ~30 seconds). This is the smart fast-path — same data, zero waiting.
+If that ticker was already processed by the most recent Daily Report run, you'll see a small green **CACHED** pill next to the "Through" date, and the result appears almost instantly (~50ms instead of ~30 seconds). This is the smart fast-path — same data, zero waiting. Predictions cached from the most recent Daily Report run are reused in Ticker Lookup including across weekends, so a Friday-afternoon report stays available through Saturday and Sunday until the next scheduled Monday run. The cache is also restored from disk on the first lookup after a server restart, so you don't pay the recompute cost just because you closed and reopened the dashboard.
 
 ### What the result shows
 
@@ -212,6 +212,7 @@ The Daily Report auto-scans **all 174 symbols** (100 automated leaders plus your
 
 **Full sortable table**
 - Click any column header to sort (▲ ascending / ▼ descending)
+- Click any row in the Daily Report table to expand the verdict card beneath that row. Only one card is open at a time — clicking a second row collapses the first. Close the card with the × button at the top-right or by clicking the same row again.
 - Columns (10 total): Symbol, Price, Lite Chg, Lite Sig, Pro Chg, Pro Sig, Consensus, Conf, Best Strategy, Firm Score
 - Color-coded signals and confidence badges
 - The Firm Score column shows a small "as of" timestamp chip reflecting when `screener_results.csv` was last regenerated
@@ -277,7 +278,7 @@ Every processed ticker appears with these columns (click any header to sort):
 
 ### Equity Curve Viewer
 
-Click any ticker row in the table to load its interactive chart. You'll see all 5 strategies drawn as portfolio value over time:
+Click any ticker row in the library table to expand its interactive chart beneath that row. Only one chart is open at a time — clicking a second row collapses the first. Close the chart with the × button at the top-right or by clicking the same row again. You'll see all 5 strategies drawn as portfolio value over time:
 
 - **Buy & Hold** — gray dashed line (benchmark)
 - **Lite Buy-Only** — warm yellow
@@ -309,7 +310,7 @@ Quantfolio runs an automated fundamentals screen over the entire SEC-registered 
 | **ARCHETYPE** | GROWTH or MATURE |
 | **SECTOR RANK** | Market-cap rank within the broad-sector group |
 
-Click any column header to sort (▲ / ▼).
+Click any column header to sort (▲ / ▼). Click any row in the Leader Detector table to expand the verdict card beneath that row. Only one card is open at a time — clicking a second row collapses the first. Close the card with the × button at the top-right or by clicking the same row again.
 
 **Filter chips** above the table:
 
@@ -564,7 +565,7 @@ You don't need to understand this to use Quantfolio, but if you're curious:
 
 8. **Caching layers that make the dashboard fast:**
    - **Price CSVs** are reused for the same trading day
-   - **Daily Report results** stay fresh for 22 hours — Ticker Lookup serves them instantly (the CACHED pill)
+   - **Daily Report results** are reused in Ticker Lookup until the next scheduled Daily Report run fires — meaning Friday's report stays valid through the weekend, and the cache survives a server restart by reloading from disk
    - **Backtest JSONs** stay fresh for 7 days — the "Run All Backtests" button skips what's still cached
    - **Best-strategy map** is rebuilt on demand from backtest cache files
 
@@ -617,7 +618,7 @@ python backtest_buy_hold.py SPY QQQ AAPL NVDA MSFT
 **Key timings**
 - **4:05 PM EST** — Daily Report auto-runs on trading days
 - **Feb 15 / May 15 / Aug 15 / Nov 15 at 2 AM** — Quarterly Leader Detector rebuild (after 10-Q season)
-- **22 hours** — How long a Daily Report result stays in the Ticker Lookup fast-path cache
+- **Until the next scheduled run** — Daily Report cache lifetime in Ticker Lookup (survives weekends and server restart)
 - **7 days** — How long a backtest cache file is considered fresh (Strategy Lab reuses it)
 - **63 trading days** — How often models retrain inside a backtest
 

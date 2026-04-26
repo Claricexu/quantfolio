@@ -1,3 +1,9 @@
+## 2026-04-25 — Round 7a
+
+- Verdict card now expands inline beneath the clicked ticker row on Daily Report and Leader Detector, instead of always showing at the top of the tab. Single card open at a time; close with × or by clicking another ticker.
+- Strategy Lab comparison chart expands inline beneath the clicked library row, with the same close-on-× behavior.
+- Ticker Lookup verdict cache now stays valid through weekends (Friday's report remains acceptable until Monday's scheduled run), and the cache loads from disk on first access after a server restart.
+
 ## 2026-04-24 — Round 5 + 6
 
 - Ticker Lookup flags predictions built from stale features when today's data is incomplete.
