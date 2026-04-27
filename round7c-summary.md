@@ -1,6 +1,6 @@
 # Round 7c — implementation summary
 
-Branch: `agent-round7c`, four feature commits ahead of `4f27320` (the last Round 7b summary commit). Not pushed, not merged. Three-agent team: **wright** reviewed the classifier API design before code was written, **skipper** implemented the module + tests + pipeline integration, **sophia** reviewed the Industry Group filter UX after the commit landed.
+Branch: `agent-round7c`, six feature/fix commits ahead of `4f27320` (the last Round 7b summary commit) plus this docs update. Not pushed, not merged. Three-agent team: **wright** reviewed the classifier API design before code was written and re-reviewed the verification-round-8 trace before the bug fixes, **skipper** implemented the module + tests + pipeline integration + the verification-round-8 fixes, **sophia** reviewed the Industry Group filter UX after Phase 4 landed and the verdict-card / compare-card UX after the fixes landed.
 
 Two feedback items closed: **FB-1 (data half)** — canonical `(sector, industry_group, industry)` derivation surfaced through the screener and verdict pipeline — and **FB-5** — Industry Group filter chips on the Leader Detector tab.
 
@@ -13,7 +13,10 @@ Two feedback items closed: **FB-1 (data half)** — canonical `(sector, industry
 | `b728de6` | feat: classifier module with SIC + ticker-override rules, 10 sectors and 29 industry groups (FB-1 data half) |
 | `22228e2` | feat: fundamental_screener writes sector/industry_group/industry; verdict_provider surfaces fields |
 | `4343952` | feat: Industry Group filter chips on Leader Detector tab (FB-5) |
-| _(this commit)_ | docs: Round 7c — classifier module, Industry Group filter, pipeline integration |
+| `7fd7f7e` | docs: Round 7c — classifier module, Industry Group filter, pipeline integration |
+| `0cc7889` | fix: api_server injects classifier sector/industry_group/industry into /api/predict[-compare] so Ticker Lookup matches Leader Detector |
+| `75b4988` | fix: frontend reads canonical v.sector/r.sector instead of broadSector for verdict card and Leader Detector; add Industry Group + Industry rows |
+| _(this commit)_ | docs: round 8 verification — bug, diagnosis, fix narrative |
 
 50 tests pass (41 existing + 9 new classifier tests). Tree clean. No push, no merge — gating before merge to `main` is the owner's UI verification step (see "Verification status" below).
 
@@ -148,7 +151,7 @@ These are tracked here for `NEXT_ROUNDS.md` /  Round 7d backlog discussion.
 
 ---
 
-## Files touched
+## Files touched (Phases 1-5)
 
 - `classifier.py` (new, 250 lines including SIC range table)
 - `tests/unit/test_classifier.py` (new, 9 tests)
@@ -157,4 +160,87 @@ These are tracked here for `NEXT_ROUNDS.md` /  Round 7d backlog discussion.
 - `verdict_provider.py` (+8 lines: docstring update only)
 - `frontend/index.html` (+105 / -9 lines: state field + HTML row + 2 JS functions + 4 handler hooks)
 - `DEVELOPMENT.md` (+2 lines: §2 repo map + §3 architecture bullet)
-- `round7c-summary.md` (this file)
+- `round7c-summary.md` (initial version + this round 8 update)
+
+---
+
+## Verification round 8 — bug found in owner spot-check, fixed
+
+### The bug — owner spot-checked 9 tickers across both tabs
+
+After the initial Round 7c shipped, the owner ran a 9-ticker spot check comparing the Sector / Industry Group / Industry values shown on Ticker Lookup vs Leader Detector. The expected canonical table:
+
+| Ticker | Sector | Industry Group | Industry |
+|---|---|---|---|
+| GOOGL | Communication Services | Telecom & Media | Interactive Media |
+| META | Communication Services | Telecom & Media | Interactive Media |
+| MSFT | Technology | Software & IT Services | Software & IT Services |
+| AAPL | Technology | Hardware & Equipment | Tech Hardware & Networking |
+| NFLX | Communication Services | Telecom & Media | Interactive Media |
+| TSLA | Consumer Discretionary | Autos & Components | Automobiles & Components |
+| V | Financials | Capital Markets | Payments |
+| AMZN | Consumer Discretionary | Retail & Restaurants | Retail |
+| MA | Financials | Capital Markets | Payments |
+
+Only MSFT matched across both tabs. For all others, Ticker Lookup showed Yahoo Finance categories (e.g. GOOGL: "Communication Services / Internet Content & Information") while Leader Detector showed JS-side SIC-derived categories (e.g. GOOGL: "Technology"). Neither matched the classifier's canonical override values.
+
+### Diagnosis — two display bugs, single shared root cause
+
+**Trace 1 — Ticker Lookup compare card.** `runPredict(sym)` (`frontend/index.html:1058`) calls `/api/predict-compare/${sym}`. The handler in `api_server.py:551` routes to `predict_ticker_compare` in `finance_model_v2.py:599`, which builds a result dict from `info.get('sector')` / `info.get('industry')` (Yahoo's free-form strings — line 574 of finance_model_v2.py, propagated through lines 630-631 of predict_ticker_compare). The frontend `buildCompareCard(d)` reads `d.sector` and `d.industry` directly. /api/predict-compare bypasses verdict_provider entirely, so classifier output never reaches this card.
+
+**Trace 2 — Ticker Lookup verdict card.** `runPredict` separately fetches `/api/screener/${sym}` (`frontend/index.html:1073`) which goes through `verdict_provider.load_verdict_for_symbol`. After Phase 3, `v.sector`, `v.industry_group`, `v.industry` ARE the canonical classifier values. But `buildVerdictCard(v)` line 995 reads `broadSector(v.sic, v.sector)` — a JS-side SIC-to-broad-sector map (lines 844-867) that ignores the second arg whenever a SIC parses. For GOOGL (SIC=7370), broadSector returns "Technology" (line 853 maps 7370-7379 to "Technology") regardless of `v.sector` being "Communication Services". The verdict card never read `v.industry_group` or `v.industry` at all.
+
+**Trace 3 — Leader Detector SECTOR column.** `_rowSector(r)` (`frontend/index.html:2985`) calls the same `broadSector(r.sic, ...)`. Even though Phase 3 made `r.sector` canonical in the CSV, the frontend ignored it via broadSector. Same SIC=7370 → "Technology" wrong-answer story for GOOGL/META/NFLX.
+
+**Shared root cause.** Two faces of the same gap: Phase 3 made the backend canonical via `verdict_provider`, but (a) the `/api/predict[-compare]` path never read `verdict_provider` so Yahoo's values flowed straight through, and (b) the frontend's three classifier-display surfaces (verdict card row 995, Leader Detector `_rowSector`, compare card sector box) all bypassed the canonical fields — broadSector for the screener-fed paths, direct Yahoo passthrough for the predict-fed path.
+
+Wright reviewed this trace before any code was written and LGTM'd: "broadSector is the SHARED root cause for verdict card row 995 and Leader Detector `_rowSector`; /api/predict-compare bypassing verdict_provider is the SEPARATE cause for the compare card." Wright recommended split commits (backend + frontend) for independent revertability.
+
+### The fix — two commits
+
+**Backend — commit `0cc7889`** (`api_server.py`, +47 lines):
+
+- New helper `_inject_classifier_fields(result, symbol)` looks up SIC from `verdict_provider.load_screener_index()` (cheap — mtime-keyed cache, no per-request CSV re-read), calls `classifier.classify(symbol, sic, result.get("industry"))`, and overlays `result["sector"]`, `result["industry_group"]`, `result["industry"]` IF the classifier returns a non-Unknown sector. ETFs and off-list stocks (classifier returns Unknown) keep Yahoo's `sector`/`industry` and have no `industry_group` field (frontend renders em-dash). Wright's call: "'Unknown' on the verdict card for an ETF is a worse UX regression than showing Yahoo's slightly-different taxonomy."
+- Three call sites injected: `/api/predict` (line 466), `/api/predict-compare` cached path (line 569), `/api/predict-compare` fresh path (line 587).
+- TICKER_OVERRIDES wins regardless of SIC because it's keyed on symbol, so GOOGL/META/NFLX/AMZN/AAPL/TSLA/V/MA always classify correctly even before the screener CSV regenerates.
+- Constraint check: zero modifications to `finance_model_v2.py`, `backtest_engine.py`, or `http_client.py`. Post-processing happens strictly in the API layer.
+
+**Frontend — commit `75b4988`** (`frontend/index.html`, +32 / -4 lines):
+
+- `buildVerdictCard` (line ~995): replaced `broadSector(v.sic, v.sector)` with `v.sector || '—'`. Added two new rows directly below: `['Industry Group', v.industry_group || '—']` and `['Industry', v.industry || '—']`. Verdict card now shows three classifier-derived rows in 1:1 correspondence with the spot-check table's three columns.
+- `_rowSector(r)` (line ~2985): prefer `r.sector` directly when non-empty; fall back to `broadSector(r.sic, ...)` only for legacy CSV rows missing the column. The fallback path is preserved so a CSV that predates Phase 3's column write still renders something rather than blank cells.
+- `buildCompareCard` (lines ~1118-1162): backend already overlays canonical fields onto `d.sector` / `d.industry`, so the existing reads now pull the canonical values. Added a small extra line beneath the existing classDetail line: `Industry Group: ${classGroup}`, font-size 10px, color text-faint, only rendered when `classGroup` is present (Yahoo fallback path doesn't have one, so the line is suppressed there). Sophia's label-clarity tweak: matches the chip filter's "INDUSTRY GROUP" label exactly so vocabulary stays consistent across surfaces.
+
+### Sophia's UX review (post-fix)
+
+LGTM with two suggestions, one applied (the "Industry Group:" label tweak above) and one filed for Round 7d:
+
+- **Verdict card row redundancy** — for tickers where industry_group == industry (e.g. MSFT: both "Software & IT Services"), the verdict card stacks two identical-value rows. Sophia kept this as-is: "the duplication is information — it tells the user 'this company's industry IS its group; there's no finer slice.' That's truthful and matches what peer benchmarking will do." The 1:1 map between verdict-card rows and the spot-check table also wins over a collapsed inline-pair format.
+- **Round 7d layout flag** (forwarded to wright for next round): the verdict card's existing `display:flex; justify-content:space-between` two-child row layout (line 1006) should refactor to a 3-column grid before the peer-median column lands, so Sector and Industry rows can render an em-dash in the peer column without collapsing alignment. Sophia: "Worth a heads-up to wright now, not a block on this commit."
+
+### Verification round 8 — owner spot check after this docs commit
+
+Each of the 9 tickers should show identical Sector / Industry Group / Industry in:
+
+1. **Ticker Lookup verdict card** — three consecutive rows in the rows[] table near the bottom of the card (look for "Sector", "Industry Group", "Industry").
+2. **Ticker Lookup Sector box** (top-right of the compare card) — primary line is Sector, secondary line is Industry, third small line is "Industry Group: X".
+3. **Leader Detector SECTOR column** — main table.
+4. **Inline verdict from Leader Detector click** — row click expands the same verdict card from (1) inline.
+
+Owner steps:
+
+1. Run `python fundamental_screener.py --universe universe_prescreened.csv --csv-out screener_results.csv` to regenerate the screener CSV with classifier-canonical sector + new industry_group / industry columns. (Without this, only the override tickers show canonical values via the API-layer overlay; non-override SIC-mapped tickers still show whatever the old CSV held.)
+2. Restart `api_server.py` so the new `_inject_classifier_fields` helper is loaded and the verdict_provider mtime cache picks up the new CSV.
+3. Hard-refresh `localhost:8000` so the frontend picks up the JS changes.
+4. Run the 9-ticker spot check above. Confirm GOOGL/META/NFLX show Communication Services / Telecom & Media / Interactive Media on both tabs; AMZN shows Consumer Discretionary / Retail & Restaurants / Retail; AAPL shows Technology / Hardware & Equipment / Tech Hardware & Networking; TSLA shows Consumer Discretionary / Autos & Components / Automobiles & Components; V/MA show Financials / Capital Markets / Payments; MSFT shows Technology / Software & IT Services / Software & IT Services.
+5. Test the ETF fallback: search for SPY (or any ETF) on Ticker Lookup; sector should still be Yahoo's value (no Unknown), and the "Industry Group:" line should NOT appear.
+
+### Files touched (round 8 fixes)
+
+- `api_server.py` (+47 lines: classifier import + injection helper + 3 call sites)
+- `frontend/index.html` (+33 / -4 lines: verdict card rows + _rowSector preference + compare card industry-group line + sophia's label tweak)
+- `round7c-summary.md` (this update)
+
+### Tests
+
+All 50 tests still pass after both fix commits — none of them touch `api_server.py`, `frontend/index.html`, or any other file modified in round 8. Smoke-tested `_inject_classifier_fields` directly: GOOGL → ('Communication Services', 'Telecom & Media', 'Interactive Media'); MSFT → ('Technology', 'Software & IT Services', 'Software & IT Services'); SPY (off-list) → Yahoo values preserved, no industry_group set.
