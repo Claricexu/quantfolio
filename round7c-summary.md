@@ -332,3 +332,18 @@ The two new commits change pipeline semantics but leave the on-disk CSVs untouch
 5. **Spot check NVDA + 2-3 non-override tickers** on the Ticker Lookup verdict card: Industry row should show the SEC SIC description (e.g. NVDA → "Semiconductors & Related Devices"), distinct from the Industry Group above it.
 6. **Spot check 2-3 override tickers** (AAPL, AMZN, GOOGL): Industry row should still show the hand-crafted value ("Tech Hardware & Networking", "Retail", "Interactive Media") — the override path beats the SIC description.
 7. **Spot check `leaders.csv` NVDA row**: `sector` column should read `"Technology"`, not the SIC description.
+
+## Known issue at merge — deferred to Round 7c-2
+
+The Sector Card on Ticker Lookup (the fourth card in the top row, alongside SVR / Market Cap / Quarterly Revenue) currently shows Yahoo Finance's GICS Industry label for non-override tickers, which differs from the Verdict Card's Industry value (the SIC description set by classifier.classify()).
+
+Examples observed in owner verification:
+- NVDA Sector Card Industry: "Semiconductors" (Yahoo); Verdict Card Industry: "Semiconductors & Related Devices" (classifier)
+- MSFT Sector Card Industry: "Software - Infrastructure" (Yahoo); Verdict Card Industry: "Services-Prepackaged Software" (classifier)
+- JNJ Sector Card Industry: "Drug Manufacturers - General" (Yahoo); Verdict Card Industry: "Pharmaceutical Preparations" (classifier)
+
+The Verdict Card on the same page shows correct classifier output for all three tiers (Sector, Industry Group, Industry). The Sector Card's render path was not updated when commit 75b4988 updated buildVerdictCard, so the parallel rendering path continues to read Yahoo's raw Industry field.
+
+Resolution path: Round 7c-2 will replace the Sector Card with a P/E card. The Verdict Card already provides canonical Sector / Industry Group / Industry information, making the Sector Card redundant. Replacing it with P/E adds a useful valuation metric that thematically pairs with SVR and Market Cap on the same row.
+
+This is a known cosmetic inconsistency at merge time, not a data correctness issue — the canonical classification values are correct everywhere they originate (screener_results.csv, leaders.csv, /api/predict response, Verdict Card display, Leader Detector Sector column).
