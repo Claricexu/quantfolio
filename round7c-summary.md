@@ -1,6 +1,6 @@
 # Round 7c — implementation summary
 
-Branch: `agent-round7c`, six feature/fix commits ahead of `4f27320` (the last Round 7b summary commit) plus this docs update. Not pushed, not merged. Three-agent team: **wright** reviewed the classifier API design before code was written and re-reviewed the verification-round-8 trace before the bug fixes, **skipper** implemented the module + tests + pipeline integration + the verification-round-8 fixes, **sophia** reviewed the Industry Group filter UX after Phase 4 landed and the verdict-card / compare-card UX after the fixes landed.
+Branch: `agent-round7c`, eight feature/fix commits ahead of `4f27320` (the last Round 7b summary commit) plus this docs update. Not pushed, not merged. Three-agent team: **wright** reviewed the classifier API design before code was written, re-reviewed the verification-round-8 trace before the bug fixes, and reviewed the source-rename consumer audit; **skipper** implemented the module + tests + pipeline integration + the verification-round-8 fixes + the source-rename and Industry-tier fix; **sophia** reviewed the Industry Group filter UX after Phase 4 landed and the verdict-card / compare-card UX after the fixes landed.
 
 Two feedback items closed: **FB-1 (data half)** — canonical `(sector, industry_group, industry)` derivation surfaced through the screener and verdict pipeline — and **FB-5** — Industry Group filter chips on the Leader Detector tab.
 
@@ -16,9 +16,14 @@ Two feedback items closed: **FB-1 (data half)** — canonical `(sector, industry
 | `7fd7f7e` | docs: Round 7c — classifier module, Industry Group filter, pipeline integration |
 | `0cc7889` | fix: api_server injects classifier sector/industry_group/industry into /api/predict[-compare] so Ticker Lookup matches Leader Detector |
 | `75b4988` | fix: frontend reads canonical v.sector/r.sector instead of broadSector for verdict card and Leader Detector; add Industry Group + Industry rows |
-| _(this commit)_ | docs: round 8 verification — bug, diagnosis, fix narrative |
+| `81a888c` | docs: round7c-summary — round 8 verification, classifier-display bug + fix narrative + sophia label tweak |
+| `9979f39` | fix: rename sector→sic_description at source in fundamental_metrics; consumers compute canonical sector via classifier |
+| `af3f110` | feat: classifier Industry tier returns SIC description when no override; falls back to industry_group when description missing |
+| _(this commit)_ | docs: round7c-summary — source-rename audit + classifier Industry-tier fix narrative |
 
-50 tests pass (41 existing + 9 new classifier tests). Tree clean. No push, no merge — gating before merge to `main` is the owner's UI verification step (see "Verification status" below).
+51 tests pass (41 existing + 10 classifier tests). Tree clean. No push, no merge — gating before merge to `main` is the owner's UI verification step (see "Verification status" below).
+
+**CSV regeneration required post-merge.** The two new commits change pipeline semantics without rewriting `screener_results.csv` or `leaders.csv`. Until the owner runs `python fundamental_screener.py --csv-out screener_results.csv` followed by `python leader_selector.py --build`, the CSVs on disk are stale: their `sector` column may still hold pre-rename data and their `industry` column will not yet reflect the new SEC-SIC-description-as-Industry-tier behavior. This is intentional per the round prompt — code lands first, CSV regen is the owner's step.
 
 ---
 
@@ -244,3 +249,86 @@ Owner steps:
 ### Tests
 
 All 50 tests still pass after both fix commits — none of them touch `api_server.py`, `frontend/index.html`, or any other file modified in round 8. Smoke-tested `_inject_classifier_fields` directly: GOOGL → ('Communication Services', 'Telecom & Media', 'Interactive Media'); MSFT → ('Technology', 'Software & IT Services', 'Software & IT Services'); SPY (off-list) → Yahoo values preserved, no industry_group set.
+
+---
+
+## Phase 6 — source rename `m['sector']` → `m['sic_description']` (commit `9979f39`)
+
+**Motivation.** The verification-round-8 fixes corrected the symptom (CSV / API output now carry canonical sector everywhere) but left the upstream mislabeling in place. `fundamental_metrics.compute_metrics` was assigning `info.get('sic_description')` — a SIC description string like "Crude Petroleum and Natural Gas" — into the dict under the key `'sector'`. The classifier overwrite in `fundamental_screener.score_ticker` then reads that mislabeled value back out (as `m.get('sector')`) just to feed it to `classify()` as the third arg, immediately overwriting `m['sector']` with the canonical value. Functionally correct, semantically wrong: any future reader of `compute_metrics`'s return dict would assume `'sector'` means canonical sector when it actually held a SIC description. Owner authorized fixing at the source.
+
+**Consumer audit (wright-reviewed).** `grep -i "sector"` over every `.py` file in the repo (root + `diagnostics/` + `tests/`; no `/scripts` or `/tools` subdirs exist) surfaced 18 files referencing the word. Each was classified:
+
+| File:line | Read pattern | Disposition |
+|---|---|---|
+| `fundamental_metrics.py:486` | assigns `m['sector']` from SIC description | **CHANGE**: rename to `m['sic_description']` |
+| `fundamental_metrics.py:527` | `_empty_metrics` companion sets `'sector': None` | **CHANGE**: rename to `'sic_description': None` |
+| `fundamental_screener.py:248` | passes `m.get('sector')` to `classify()` as `sic_description` arg | **CHANGE**: read `m.get('sic_description')` instead |
+| `fundamental_screener.py:240-246` (comment block) | docstring describing the old key name | **CHANGE**: update narrative to reflect rename |
+| `fundamental_screener.py:250` | `m['sector'] = _sector` (the canonical overwrite) | no-op: writes canonical sector |
+| `fundamental_screener.py:458` | `m.get('sector')` for human-readable terminal print | no-op: reads post-overwrite (canonical) |
+| `fundamental_screener.py:465` | `'sector'` in `CSV_OUT_FIELDS` schema | no-op: column is canonical post-overwrite |
+| `api_server.py:469` | `result["sector"] = sec` (writes canonical from classify()) | no-op: writes canonical |
+| `finance_model_v2.py:290, 574, 630` | `info.get('sector')` — but `info` is yfinance's Yahoo dict, independent path | no-op: yfinance, not our metrics |
+| `leader_selector.py:59, 208` | reads `'sector'` from `screener_results.csv` (canonical) | no-op |
+| `diagnostics/diag_cat_a_tags.py:119` | reads `r.get('sector')` from screener CSV | no-op |
+| `diagnostics/diag_unknown_triage.py:122, 146, 170` | reads `r.get('sector')` from screener CSV | no-op |
+| `tests/backtest_baselines/verify_phase3.py:274` | `"sector"` in expected-keys set for `predict_ticker` (Yahoo-sourced) output | no-op: yfinance path |
+
+Wright's audit-completeness check: confirmed the grep covered every `.py` in the repo, including subdirectories. No new consumers slipped in via `/scripts` or `/tools` (those dirs don't exist). Three files had to change in total: `fundamental_metrics.py` (the source) and `fundamental_screener.py` (the only direct consumer of `m['sector']` that needs the SIC description). LGTM.
+
+**Skipper trace — compute_metrics → CSV write.** After this commit:
+
+1. `fundamental_metrics.compute_metrics(symbol, conn)` returns a dict containing `'sic_description'` (e.g. "Crude Petroleum and Natural Gas") and **no** `'sector'` key.
+2. `fundamental_screener.score_ticker(metrics)` copies the dict as `m`, calls `classify(m['symbol'], m['sic'], m.get('sic_description'))`, and assigns the three returned strings to `m['sector']`, `m['industry_group']`, `m['industry']`.
+3. The `csv.DictWriter` projection at write time reads `m['sector']` (now canonical), `m['industry_group']`, `m['industry']` per `CSV_OUT_FIELDS`. SIC description stays internal to the pipeline; it's not written to the CSV (the Industry column carries it after Commit 2 below).
+
+**Tests.** All 50 tests still pass — no test imports `fundamental_metrics` or `fundamental_screener`, so the rename is invisible to the suite. Confirmed via `python tests/unit/run_all.py` reporting `TOTAL FAILURES: 0`.
+
+---
+
+## Phase 7 — classifier Industry tier returns SIC description (commit `af3f110`)
+
+**Motivation.** Pre-this-commit, `classify()` returned a 3-tuple where `industry == industry_group` for most non-override SIC codes — wasting the third tier. NVDA's verdict card spot check made it concrete: the user expected to see "Semiconductors & Related Devices" (the SEC's filed description for SIC 3674) at the Industry row, but saw "Semiconductors" — duplicating the Industry Group tier just above it. Three-tier hierarchy intent:
+
+- **Sector** — broad navigation (10 buckets, e.g. "Technology").
+- **Industry Group** — peer-median benchmarking unit (29 groups, e.g. "Semiconductors").
+- **Industry** — what the company actually does, the finest label (e.g. "Semiconductors & Related Devices" for NVDA, "Pharmaceutical Preparations" for PFE, "Crude Petroleum and Natural Gas" for XOM).
+
+`TICKER_OVERRIDES` exists precisely so a hand-crafted Industry label can override the SEC's filed description for mega-caps whose SIC doesn't reflect their actual business (AAPL → "Tech Hardware & Networking", AMZN → "Retail"). Override tickers keep that hand-crafted value; non-override tickers now surface the SEC SIC description.
+
+**Implementation.** `classify()`'s SIC-range branch now composes its return tuple as `(sector, industry_group, sic_description if sic_description else industry_group)`. The `SIC_RANGES` table itself is unchanged — the third-tuple slot still carries a label, but it serves as the FALLBACK industry only when the caller passes an empty/None `sic_description`. Override path (`TICKER_OVERRIDES[symbol]`) returns the override triple verbatim and ignores `sic_description`. Numeric-but-unmapped SIC and Unknown branches unchanged.
+
+**Module docstring + table comment updated** so future readers see the new contract. The "Coal Mining + Oil & Gas Extraction" block comment now explicitly notes that `"Services"` (the third slot for SIC 1300-1399) is the fallback label, used only when sic_description is missing — the spec language matches the new behavior so a future PR adding a row doesn't have to re-derive it.
+
+**Tests.**
+
+- `test_classify_by_sic_pharma` updated: expected industry now `"Pharmaceutical Preparations"` (was `"Pharmaceuticals"`, which duplicated industry_group). The SIC description string is the standard SEC EDGAR label for SIC 2834.
+- `test_classify_by_sic_oil_gas_ep` updated: expected industry now `"Crude Petroleum and Natural Gas"` (was `"Services"`, the fallback). Standard SEC EDGAR label for SIC 1311.
+- New test `test_classify_industry_falls_back_to_industry_group_when_sic_description_missing`: passes `("XYZ", "2834", None)` and asserts `industry == industry_group`. Locks the None-fallback path so a future change can't accidentally return `None` or the literal string `"None"` for the Industry tier.
+- Override tests (AAPL, GOOGL, AMZN, TSLA) and Unknown/null tests unchanged — override beats SIC description, and Unknown branches don't go through the SIC-range slot.
+
+**Skipper trace — three motivating cases:**
+
+| Call | Expected return |
+|---|---|
+| `classify("NVDA", "3674", "Semiconductors & Related Devices")` | `("Technology", "Semiconductors", "Semiconductors & Related Devices")` |
+| `classify("AAPL", "3571", "Electronic Computers")` | `("Technology", "Hardware & Equipment", "Tech Hardware & Networking")` (override beats SIC desc) |
+| `classify("XYZ", "2834", None)` | `("Healthcare", "Pharmaceuticals", "Pharmaceuticals")` (industry == industry_group) |
+
+All three confirmed by running `python tests/unit/test_classifier.py` post-edit; 10 PASS, 0 FAIL. Full suite reports `TOTAL FAILURES: 0` across 51 tests (41 prior + 10 classifier).
+
+**Wright's review of new test expectations.** The two updated SIC descriptions match what SEC EDGAR's company facts API actually returns for those SIC codes — they're not invented. No classifier-internal bug surfaced during the test edits.
+
+---
+
+## Owner verification steps (post-merge)
+
+The two new commits change pipeline semantics but leave the on-disk CSVs untouched. Owner steps to bring the artifacts in line:
+
+1. **Regenerate `screener_results.csv`** — `python fundamental_screener.py --universe universe_prescreened.csv --csv-out screener_results.csv`. The `sector` column will be unchanged in shape (still canonical sector); the `industry` column will now carry SEC SIC descriptions for non-override tickers.
+2. **Regenerate `leaders.csv`** — `python leader_selector.py --build`. Picks up the regenerated screener CSV; `sector` column should now read e.g. "Technology" for NVDA, never "Semiconductors & Related Devices" (which would have been wrong before the source rename if anyone ever set `m['sector']` directly without the classifier overwrite).
+3. **Restart `api_server.py`** so the verdict_provider mtime cache picks up the new CSV.
+4. **Hard refresh `localhost:8000`** so the frontend re-fetches.
+5. **Spot check NVDA + 2-3 non-override tickers** on the Ticker Lookup verdict card: Industry row should show the SEC SIC description (e.g. NVDA → "Semiconductors & Related Devices"), distinct from the Industry Group above it.
+6. **Spot check 2-3 override tickers** (AAPL, AMZN, GOOGL): Industry row should still show the hand-crafted value ("Tech Hardware & Networking", "Retail", "Interactive Media") — the override path beats the SIC description.
+7. **Spot check `leaders.csv` NVDA row**: `sector` column should read `"Technology"`, not the SIC description.
