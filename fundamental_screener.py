@@ -238,14 +238,13 @@ def score_ticker(metrics):
     m = dict(metrics)
 
     # Round 7c: derive canonical (sector, industry_group, industry) via
-    # classifier.classify. The existing `sector` field arrives from
-    # fundamental_metrics holding the SIC description string; we overwrite
-    # it with the classifier sector here so downstream code (CSV row,
-    # verdict_provider, frontend) reads canonical sector everywhere. The
-    # SIC description is forwarded to classify() as the third arg purely
-    # for forward-compat with future tie-breaker rules.
+    # classifier.classify. fundamental_metrics now returns the raw SEC SIC
+    # description under m['sic_description']; m has no 'sector' key on the
+    # way in. The classifier produces the canonical 10-bucket sector and
+    # the three-tier hierarchy, which we set here so downstream code (CSV
+    # row, verdict_provider, frontend) reads canonical sector everywhere.
     _sector, _industry_group, _industry = classify(
-        m.get('symbol'), m.get('sic'), m.get('sector')
+        m.get('symbol'), m.get('sic'), m.get('sic_description')
     )
     m['sector'] = _sector
     m['industry_group'] = _industry_group

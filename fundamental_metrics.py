@@ -483,7 +483,7 @@ def compute_metrics(symbol, sector_context=None, conn=None):
     return {
         'symbol': symbol,
         'name': info.get('name'),
-        'sector': info.get('sic_description'),
+        'sic_description': info.get('sic_description'),
         'sic': info.get('sic'),
         'market_cap': mcap,
         'dividend_yield': div_yield,
@@ -524,7 +524,7 @@ def _empty_metrics(symbol, info):
     return {
         'symbol': symbol,
         'name': (info or {}).get('name'),
-        'sector': None,
+        'sic_description': None,
         'sic': None,
         'market_cap': mcap,
         'dividend_yield': div_yield,
