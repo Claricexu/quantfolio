@@ -1129,8 +1129,6 @@ function buildCompareCard(d) {
   // and continues to surface on Leader Detector and the verdict card; it is no
   // longer rendered as a Ticker Lookup card. P/E uses d.pe_trailing (yfinance
   // trailingPE), independent of SEC data, so it can render even when SVR is N/A.
-  const isETF = d.quote_type === 'ETF';
-
   function fmtPE(v) {
     if (v == null) return '\u2014';
     if (v <= 0) return '\u2014';
@@ -1157,8 +1155,15 @@ function buildCompareCard(d) {
       </div>`;
   } else {
     svrBlock = `
-      <div class="svr-grid" style="grid-template-columns:1fr 1fr">
-        <div style="background:var(--bg-cell);border-radius:8px;padding:10px 16px;font-size:12px;color:var(--text-faint)">SVR: N/A \u2014 ${isETF ? 'ETF' : 'fundamental data unavailable'}</div>
+      <div class="svr-grid" style="grid-template-columns:1fr 1fr 1fr 1fr">
+        <div class="svr-box" style="background:#0e1e2e;border:1px solid var(--bg-cell)">
+          <div class="label">SVR</div>
+          <div class="value" style="font-size:20px;color:var(--text-secondary)">\u2014</div>
+        </div>
+        <div class="svr-box" style="background:var(--bg-cell)"><div class="label">Market Cap</div>
+          <div class="value" style="font-size:15px;color:var(--text-secondary)">${fmtCap(d.market_cap)}</div></div>
+        <div class="svr-box" style="background:var(--bg-cell)"><div class="label">Quarterly Revenue</div>
+          <div class="value" style="font-size:15px;color:var(--text-secondary)">${fmtCap(d.quarterly_revenue)}</div></div>
         <div class="svr-box" style="background:var(--bg-cell)"><div class="label">P/E</div>
           <div class="value" style="font-size:15px;color:var(--text-secondary)">${fmtPE(d.pe_trailing)}</div></div>
       </div>`;
