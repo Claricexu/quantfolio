@@ -992,7 +992,15 @@ function buildVerdictCard(v) {
     ['SVR vs Sector',        v.svr_vs_sector_median != null ? v.svr_vs_sector_median.toFixed(2)+'x' : '\u2014'],
     ['Sector Rank',          v.market_cap_rank_in_sector != null ? ('#'+v.market_cap_rank_in_sector+(v.sector_peers ? ' of '+v.sector_peers : '')) : '\u2014'],
     ['Shares 3Y Growth',     fmtPct(v.shares_growth_3y)],
-    ['Sector',               broadSector(v.sic, v.sector)],
+    // Round 7c verification round 8: read canonical classifier fields
+    // (v.sector / v.industry_group / v.industry) directly from the verdict
+    // response. Pre-fix this row called broadSector(v.sic, v.sector) \u2014 a
+    // JS-side SIC mapping that ignored TICKER_OVERRIDES and disagreed with
+    // Leader Detector for GOOGL/META/NFLX/AMZN/AAPL/TSLA/V/MA. broadSector
+    // stays in the file for any non-classifier code path that still wants it.
+    ['Sector',               v.sector || '\u2014'],
+    ['Industry Group',       v.industry_group || '\u2014'],
+    ['Industry',             v.industry || '\u2014'],
   ];
   const rowsHTML = rows.map(([l,val]) => `
     <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 10px;border-bottom:1px solid var(--border)">
@@ -1115,13 +1123,24 @@ function buildCompareCard(d) {
   const consBorder = signalBorder(cs);
   const consColor = signalColor(cs);
 
-  // Sector / Industry card
+  // Sector / Industry card.
+  // Round 7c verification round 8: api_server._inject_classifier_fields
+  // overlays canonical (sector, industry_group, industry) onto the result
+  // before it ships to the frontend. d.sector / d.industry are now the
+  // classifier values for tickers in screener_results.csv (and for the
+  // 9 TICKER_OVERRIDES regardless of SIC); they fall back to Yahoo's free-
+  // form taxonomy for ETFs and off-list stocks. d.industry_group is the
+  // peer-median benchmarking unit and is rendered as a small extra line
+  // beneath the industry detail \u2014 only when present (Yahoo fallback path
+  // doesn't carry one, so the line is suppressed there).
   const sect = d.sector;
   const ind = d.industry;
+  const grp = d.industry_group;
   const qt = d.quote_type;
   const isETF = qt === 'ETF';
   const classLabel = isETF ? 'ETF' : (sect && ind ? `${sect}` : (sect || qt || '\u2014'));
   const classDetail = isETF ? (ind || 'Exchange-Traded Fund') : (ind || '');
+  const classGroup = (!isETF && grp) ? grp : '';
 
   let svrBlock = '';
   if (d.svr != null) {
@@ -1138,7 +1157,8 @@ function buildCompareCard(d) {
           <div class="value" style="font-size:15px;color:var(--text-secondary)">${fmtCap(d.quarterly_revenue)}</div></div>
         <div class="svr-box" style="background:var(--bg-cell)"><div class="label">${isETF ? 'Type' : 'Sector'}</div>
           <div class="value" style="font-size:14px;color:var(--text-secondary)">${classLabel}</div>
-          ${classDetail ? `<div style="font-size:11px;color:var(--text-muted);margin-top:3px">${classDetail}</div>` : ''}</div>
+          ${classDetail ? `<div style="font-size:11px;color:var(--text-muted);margin-top:3px">${classDetail}</div>` : ''}
+          ${classGroup ? `<div style="font-size:10px;color:var(--text-faint);margin-top:2px">Group: ${classGroup}</div>` : ''}</div>
       </div>`;
   } else {
     svrBlock = `
@@ -1146,7 +1166,8 @@ function buildCompareCard(d) {
         <div style="background:var(--bg-cell);border-radius:8px;padding:10px 16px;font-size:12px;color:var(--text-faint)">SVR: N/A \u2014 ${isETF ? 'ETF' : 'fundamental data unavailable'}</div>
         <div class="svr-box" style="background:var(--bg-cell)"><div class="label">${isETF ? 'Type' : 'Sector'}</div>
           <div class="value" style="font-size:14px;color:var(--text-secondary)">${classLabel}</div>
-          ${classDetail ? `<div style="font-size:11px;color:var(--text-muted);margin-top:3px">${classDetail}</div>` : ''}</div>
+          ${classDetail ? `<div style="font-size:11px;color:var(--text-muted);margin-top:3px">${classDetail}</div>` : ''}
+          ${classGroup ? `<div style="font-size:10px;color:var(--text-faint);margin-top:2px">Group: ${classGroup}</div>` : ''}</div>
       </div>`;
   }
 
@@ -2982,6 +3003,13 @@ python fundamental_screener.py --universe universe_prescreened.csv --csv-out scr
 }
 
 function _rowSector(r) {
+  // Round 7c verification round 8: prefer the canonical classifier sector
+  // written into screener_results.csv by fundamental_screener.score_ticker.
+  // Pre-fix this called broadSector(r.sic, ...) which, for GOOGL/META/NFLX
+  // (SIC 7370-7379) returned "Technology" overriding the Communication
+  // Services override. r.sector is now authoritative; broadSector remains
+  // as the fallback for legacy CSV rows that predate the Phase 3 schema.
+  if (r && typeof r.sector === 'string' && r.sector.trim()) return r.sector.trim();
   return broadSector(r.sic, r.sector || r.sic_description || '');
 }
 
