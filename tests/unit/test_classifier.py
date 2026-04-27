@@ -64,22 +64,25 @@ def test_classify_tesla_is_autos_and_components():
 
 
 # 5. SIC 2834 (Pharmaceutical Preparations) — non-overridden ticker resolves
-#    via the SIC range table to Healthcare / Pharmaceuticals / Pharmaceuticals.
+#    via the SIC range table to Healthcare / Pharmaceuticals, with the SEC
+#    SIC description surfaced as the third (industry) tier.
 def test_classify_by_sic_pharma():
     assert classify("PFE", 2834, "Pharmaceutical Preparations") == (
         "Healthcare",
         "Pharmaceuticals",
-        "Pharmaceuticals",
+        "Pharmaceutical Preparations",
     )
 
 
 # 6. SIC 1311 (Crude Petroleum & Natural Gas) — three-tier path showing that
-#    industry_group and industry diverge for the energy E&P group.
+#    sector, industry_group, and industry are all distinct for the energy
+#    E&P group: Industry now carries the SEC SIC description ("what the
+#    company does") rather than the fallback "Services" bucket label.
 def test_classify_by_sic_oil_gas_ep():
     assert classify("XOM", 1311, "Crude Petroleum and Natural Gas") == (
         "Energy",
         "Oil, Gas & Coal E&P",
-        "Services",
+        "Crude Petroleum and Natural Gas",
     )
 
 
@@ -110,6 +113,13 @@ def test_classify_null_sic_returns_unknown():
     assert classify("UNKWN", "not-a-sic", None) == ("Unknown", "Unknown", "Unknown")
 
 
+# 10. SIC matches a range but sic_description is missing — Industry tier
+#     falls back to industry_group so the field is always populated.
+def test_classify_industry_falls_back_to_industry_group_when_sic_description_missing():
+    sector, industry_group, industry = classify("XYZ", "2834", None)
+    assert industry == industry_group
+
+
 def run_all() -> int:
     fails = 0
     for name, fn in (
@@ -131,6 +141,8 @@ def run_all() -> int:
          test_classify_is_deterministic_for_same_input),
         ("test_classify_null_sic_returns_unknown",
          test_classify_null_sic_returns_unknown),
+        ("test_classify_industry_falls_back_to_industry_group_when_sic_description_missing",
+         test_classify_industry_falls_back_to_industry_group_when_sic_description_missing),
     ):
         fails += _run(name, fn)
     return fails

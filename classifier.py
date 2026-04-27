@@ -15,9 +15,13 @@ Three tiers:
                       large enough for a meaningful median, while the more
                       granular ``industry`` field preserves "Interactive Media"
                       so the verdict card can label these tickers honestly.
-    industry        — finer display label. For most SIC codes
-                      ``industry == industry_group``; for the override tickers
-                      they may differ.
+    industry        — finest display label, "what the company does."
+                      For non-override tickers this is the SEC SIC
+                      description (e.g. "Pharmaceutical Preparations" for
+                      SIC 2834), so all three tiers carry distinct
+                      information; falls back to ``industry_group`` when
+                      no SIC description is supplied. Override tickers
+                      use a hand-crafted industry label.
 
 Public API:
     classify(symbol, sic, sic_description) -> (sector, industry_group, industry)
@@ -82,11 +86,12 @@ SIC_RANGES: list[Tuple[int, int, Tuple[str, str, str]]] = [
     # Metal Mining
     (1000, 1099, ("Materials", "Metals/Mining/Steel", "Metals/Mining/Steel")),
 
-    # Coal Mining + Oil & Gas Extraction (E&P + field services live here)
+    # Coal Mining + Oil & Gas Extraction (E&P + field services live here).
+    # The third-tuple slot is the FALLBACK industry — used only when the
+    # caller passes an empty sic_description. When sic_description is
+    # present (the normal path post-Commit-2) the classifier returns it
+    # as the Industry tier instead.
     (1200, 1299, ("Energy", "Oil, Gas & Coal E&P", "Coal Mining")),
-    # SIC 1311 (Crude Petroleum & Natural Gas), 1381/1382/1389 (drilling +
-    # field services). The user's test_classify_by_sic_oil_gas_ep pins
-    # SIC 1311 → ("Energy", "Oil, Gas & Coal E&P", "Services").
     (1300, 1399, ("Energy", "Oil, Gas & Coal E&P", "Services")),
 
     # Nonmetallic Minerals (excluding fuels) — bucketed with metals/mining
@@ -291,10 +296,14 @@ def classify(
         symbol: ticker string. ``None`` or empty falls through to SIC lookup.
         sic: SIC code as int (XBRL) or str (CSV). ``None`` / empty / non-
              numeric returns the unknown triple.
-        sic_description: accepted for forward compatibility with future
-             tie-breakers (e.g. disambiguating SIC 6199 "Finance Services"
-             via description keywords). Currently unused — kept in the
-             signature so callers don't need to change later.
+        sic_description: SEC's free-text industry label for the SIC code
+             (e.g. "Pharmaceutical Preparations" for 2834). When present
+             on a non-override ticker, it becomes the third tier
+             (``industry``) so the verdict card shows what the company
+             actually does rather than the wider industry_group bucket.
+             ``None``/empty falls back to ``industry_group``. Override
+             tickers ignore this argument — their hand-crafted industry
+             label always wins.
 
     Returns:
         3-tuple of non-empty strings.
@@ -317,7 +326,13 @@ def classify(
     if idx >= 0:
         lo, hi, classification = SIC_RANGES[idx]
         if lo <= sic_int <= hi:
-            return classification
+            sector, industry_group, industry = classification
+            # Use SEC's SIC description as the Industry tier — what the
+            # company actually does — so all three tiers carry distinct
+            # information instead of duplicating industry_group. Empty/None
+            # falls back to industry_group so the field is always populated.
+            industry = sic_description if sic_description else industry_group
+            return (sector, industry_group, industry)
 
     # Step 3: numeric SIC, but no range covers it.
     return ("Unknown", "Unknown", f"SIC {sic_int}")
