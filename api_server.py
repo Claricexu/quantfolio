@@ -58,6 +58,11 @@ from finance_model_v2 import (
     _ensure_cache_dir,
 )
 
+# Round 7c verification round 8: canonical (sector, industry_group, industry)
+# classifier. Imported at module load — leaf module, stdlib-only, no SEC or
+# screener dependency, so it's safe to use even if HAS_SCREENER is False.
+from classifier import classify as _classify_symbol
+
 # ─── Optional: fundamental screener (Good Firm Framework) ────────────────────
 # Loads edgar_fetcher + fundamental_screener. Failure here does NOT affect the
 # three existing tabs — endpoints below simply return 503 if unavailable.
@@ -428,6 +433,45 @@ app.add_middleware(
 
 # ─── API Routes ───
 
+
+def _inject_classifier_fields(result: dict, symbol: str) -> dict:
+    """Round 7c verification round 8 — overlay classifier-derived
+    (sector, industry_group, industry) onto a /api/predict[-compare] result
+    so Ticker Lookup shows the same canonical labels as Leader Detector.
+
+    Resolution order:
+      1. Look up SIC from the screener CSV via verdict_provider (cheap —
+         mtime-keyed in-process cache; only re-reads CSV on file change).
+      2. Call classifier.classify(symbol, sic, yahoo_industry).
+      3. If classifier returns a non-Unknown sector (i.e. ticker is in
+         TICKER_OVERRIDES OR the SIC matched a range), OVERWRITE result's
+         sector + industry, and set industry_group. Override tickers are
+         keyed on the symbol so they win regardless of SIC.
+      4. If classifier returns Unknown (ETFs, off-list stocks with no SEC
+         filings), KEEP Yahoo's sector/industry — wright's review:
+         "'Unknown' on the verdict card for an ETF is a worse UX
+         regression than showing Yahoo's slightly-different taxonomy."
+         Leave industry_group absent so the frontend renders an em-dash.
+
+    No changes to finance_model_v2.py per the round constraint — the model
+    result is mutated only here in the API layer.
+    """
+    sic = None
+    if HAS_SCREENER:
+        try:
+            row = _verdict_provider.load_screener_index().get(symbol.upper())
+            if row:
+                sic = row.get("sic")
+        except Exception:
+            pass
+    sec, ig, ind = _classify_symbol(symbol, sic, result.get("industry"))
+    if sec != "Unknown":
+        result["sector"] = sec
+        result["industry_group"] = ig
+        result["industry"] = ind
+    return result
+
+
 @app.get("/api/predict/{symbol}")
 async def api_predict(symbol: str, version: str = None, strategy: str = None,
                       weight_rf: float = 0.8, weight_xgb: float = 0.2,
@@ -463,6 +507,7 @@ async def api_predict(symbol: str, version: str = None, strategy: str = None,
     # Enrich with best backtest strategy if available
     best_map = _get_best_strategy_map()
     result['best_strategy'] = best_map.get(symbol)
+    _inject_classifier_fields(result, symbol)
     return JSONResponse(result)
 
 
@@ -569,6 +614,7 @@ async def api_predict_compare(symbol: str, strategy: str = None, refresh: bool =
         if cached is not None:
             best_map = _get_best_strategy_map()
             cached['best_strategy'] = best_map.get(symbol)
+            _inject_classifier_fields(cached, symbol)
             return JSONResponse(cached)
 
     strat = strategy if strategy in ('auto', 'full', 'buy_only') else 'auto'
@@ -581,6 +627,7 @@ async def api_predict_compare(symbol: str, strategy: str = None, refresh: bool =
     # Enrich with best backtest strategy if available
     best_map = _get_best_strategy_map()
     result['best_strategy'] = best_map.get(symbol)
+    _inject_classifier_fields(result, symbol)
     return JSONResponse(result)
 
 
