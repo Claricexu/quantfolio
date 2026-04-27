@@ -377,6 +377,29 @@ def get_dividend_yield(symbol):
 
 # ─── Main: compute 15 metrics ────────────────────────────────────────────────
 
+_pe_cache = {}
+
+def _get_trailing_pe(symbol):
+    """Fetch yfinance trailingPE; pass through None / negative / large values
+    unchanged (frontend formatter applies sanity caps). Round 7c-2.
+
+    Cached per-symbol to mirror get_market_cap / get_dividend_yield. Note: the
+    SEC `info` dict in compute_metrics() is from edgar_fetcher and does NOT
+    contain yfinance fields, so a separate yfinance call is required."""
+    if symbol in _pe_cache:
+        return _pe_cache[symbol]
+    if not HAS_YF:
+        _pe_cache[symbol] = None
+        return None
+    try:
+        t = yf.Ticker(symbol)
+        pe = t.info.get('trailingPE')
+        _pe_cache[symbol] = float(pe) if pe is not None else None
+    except Exception:
+        _pe_cache[symbol] = None
+    return _pe_cache[symbol]
+
+
 def compute_metrics(symbol, sector_context=None, conn=None):
     """
     Compute the 15 Good Firm Framework metrics for a ticker.
@@ -506,6 +529,7 @@ def compute_metrics(symbol, sector_context=None, conn=None):
         # Valuation
         'svr': svr,
         'svr_vs_sector_median': svr_vs_sector,
+        'pe_trailing': _get_trailing_pe(symbol),
         # Dealbreaker flags
         'flag_diluting': flag_diluting,
         'shares_growth_3y': shares_growth_3y,
@@ -542,6 +566,7 @@ def _empty_metrics(symbol, info):
         'roic_ttm': None,
         'svr': None,
         'svr_vs_sector_median': None,
+        'pe_trailing': _get_trailing_pe(symbol),
         'flag_diluting': None,
         'shares_growth_3y': None,
         'flag_burning_cash': None,

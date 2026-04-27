@@ -462,6 +462,16 @@ def _inject_classifier_fields(result: dict, symbol: str) -> dict:
             row = _verdict_provider.load_screener_index().get(symbol.upper())
             if row:
                 sic = row.get("sic")
+                # Round 7c-2: piggyback the screener-row lookup to surface
+                # pe_trailing on Ticker Lookup's P/E card. verdict_provider's
+                # _FLOAT_COLS whitelist doesn't include pe_trailing, so the
+                # row value may be a raw CSV string — coerce to float here.
+                pe_raw = row.get("pe_trailing")
+                if pe_raw not in (None, ""):
+                    try:
+                        result["pe_trailing"] = float(pe_raw)
+                    except (TypeError, ValueError):
+                        result["pe_trailing"] = None
         except Exception:
             pass
     sec, ig, ind = _classify_symbol(symbol, sic, result.get("industry"))

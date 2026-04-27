@@ -471,7 +471,7 @@ CSV_OUT_FIELDS = [
     'gross_margin_ttm', 'operating_margin_ttm',
     'operating_cash_flow_ttm', 'free_cash_flow_ttm',
     'fcf_margin_ttm', 'rule_40_score',
-    'roic_ttm', 'svr', 'svr_vs_sector_median',
+    'roic_ttm', 'svr', 'svr_vs_sector_median', 'pe_trailing',
     'flag_diluting', 'flag_burning_cash', 'flag_spac_or_microcap',
     # Bucket 2 (2026-04-21): serialized per-test + dealbreaker maps so the
     # verdict card's test-dot row + flag chips can render from CSV alone
