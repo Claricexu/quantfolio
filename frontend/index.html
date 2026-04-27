@@ -1123,24 +1123,21 @@ function buildCompareCard(d) {
   const consBorder = signalBorder(cs);
   const consColor = signalColor(cs);
 
-  // Sector / Industry card.
-  // Round 7c verification round 8: api_server._inject_classifier_fields
-  // overlays canonical (sector, industry_group, industry) onto the result
-  // before it ships to the frontend. d.sector / d.industry are now the
-  // classifier values for tickers in screener_results.csv (and for the
-  // 9 TICKER_OVERRIDES regardless of SIC); they fall back to Yahoo's free-
-  // form taxonomy for ETFs and off-list stocks. d.industry_group is the
-  // peer-median benchmarking unit and is rendered as a small extra line
-  // beneath the industry detail \u2014 only when present (Yahoo fallback path
-  // doesn't carry one, so the line is suppressed there).
-  const sect = d.sector;
-  const ind = d.industry;
-  const grp = d.industry_group;
-  const qt = d.quote_type;
-  const isETF = qt === 'ETF';
-  const classLabel = isETF ? 'ETF' : (sect && ind ? `${sect}` : (sect || qt || '\u2014'));
-  const classDetail = isETF ? (ind || 'Exchange-Traded Fund') : (ind || '');
-  const classGroup = (!isETF && grp) ? grp : '';
+  // Round 7c-2: Sector Card replaced with P/E Card (4th cell in svr-grid).
+  // The Sector / Industry / Industry-Group classification still ships on
+  // d.sector / d.industry / d.industry_group via api_server._inject_classifier_fields,
+  // and continues to surface on Leader Detector and the verdict card; it is no
+  // longer rendered as a Ticker Lookup card. P/E uses d.pe_trailing (yfinance
+  // trailingPE), independent of SEC data, so it can render even when SVR is N/A.
+  const isETF = d.quote_type === 'ETF';
+
+  function fmtPE(v) {
+    if (v == null) return '\u2014';
+    if (v <= 0) return '\u2014';
+    if (v > 9999) return '\u2014';
+    if (v < 100) return v.toFixed(1) + 'x';
+    return Math.round(v) + 'x';
+  }
 
   let svrBlock = '';
   if (d.svr != null) {
@@ -1155,19 +1152,15 @@ function buildCompareCard(d) {
           <div class="value" style="font-size:15px;color:var(--text-secondary)">${fmtCap(d.market_cap)}</div></div>
         <div class="svr-box" style="background:var(--bg-cell)"><div class="label">Quarterly Revenue</div>
           <div class="value" style="font-size:15px;color:var(--text-secondary)">${fmtCap(d.quarterly_revenue)}</div></div>
-        <div class="svr-box" style="background:var(--bg-cell)"><div class="label">${isETF ? 'Type' : 'Sector'}</div>
-          <div class="value" style="font-size:14px;color:var(--text-secondary)">${classLabel}</div>
-          ${classDetail ? `<div style="font-size:11px;color:var(--text-muted);margin-top:3px">${classDetail}</div>` : ''}
-          ${classGroup ? `<div style="font-size:10px;color:var(--text-faint);margin-top:2px">Industry Group: ${classGroup}</div>` : ''}</div>
+        <div class="svr-box" style="background:var(--bg-cell)"><div class="label">P/E</div>
+          <div class="value" style="font-size:20px;color:var(--text-secondary)">${fmtPE(d.pe_trailing)}</div></div>
       </div>`;
   } else {
     svrBlock = `
       <div class="svr-grid" style="grid-template-columns:1fr 1fr">
         <div style="background:var(--bg-cell);border-radius:8px;padding:10px 16px;font-size:12px;color:var(--text-faint)">SVR: N/A \u2014 ${isETF ? 'ETF' : 'fundamental data unavailable'}</div>
-        <div class="svr-box" style="background:var(--bg-cell)"><div class="label">${isETF ? 'Type' : 'Sector'}</div>
-          <div class="value" style="font-size:14px;color:var(--text-secondary)">${classLabel}</div>
-          ${classDetail ? `<div style="font-size:11px;color:var(--text-muted);margin-top:3px">${classDetail}</div>` : ''}
-          ${classGroup ? `<div style="font-size:10px;color:var(--text-faint);margin-top:2px">Industry Group: ${classGroup}</div>` : ''}</div>
+        <div class="svr-box" style="background:var(--bg-cell)"><div class="label">P/E</div>
+          <div class="value" style="font-size:20px;color:var(--text-secondary)">${fmtPE(d.pe_trailing)}</div></div>
       </div>`;
   }
 
