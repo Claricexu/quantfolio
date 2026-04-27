@@ -1,3 +1,7 @@
+## 2026-04-27 — Round 7c-2
+
+- Replaced the redundant Sector card on Ticker Lookup with a P/E (Price-to-Earnings) card. Sector and Industry information remain available on the Verdict card below.
+
 ## 2026-04-25 — Round 7a
 
 - Verdict card now expands inline beneath the clicked ticker row on Daily Report and Leader Detector, instead of always showing at the top of the tab. Single card open at a time; close with × or by clicking another ticker.
