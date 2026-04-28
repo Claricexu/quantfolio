@@ -977,35 +977,72 @@ function buildVerdictCard(v) {
     return `<span style="display:inline-block;font-size:10px;font-weight:600;color:var(--red-text);background:var(--red-bg);border:1px solid var(--red-border);padding:2px 8px;border-radius:10px;letter-spacing:0.5px">\u26A0 ${lbl}</span>`;
   }).join(' ');
 
+  // Round 7d Phase 3 / Commit 4: 3-column grid (Metric | Company | Peer Median).
+  // Each row is [label, value, peerKey] where peerKey names the peer_median_*
+  // field on the verdict payload (without the "peer_median_" prefix). peerKey
+  // = null marks a categorical / non-comparable row \u2014 em-dash renders in the
+  // peer column to keep visual rhythm. SVR-vs-sector row dropped: peer-median
+  // SVR now occupies that comparison slot. fcf_margin_ttm added per Round 7d
+  // owner approval (was absent before; backend has carried the field for
+  // multiple rounds).
   const rows = [
-    ['Revenue (TTM)',        fmtCap(v.revenue_ttm)],
-    ['Revenue YoY',          fmtPct(v.revenue_yoy_growth)],
-    ['Revenue 3Y CAGR',      fmtPct(v.revenue_3y_cagr)],
-    ['Growth Trajectory',    v.growth_trajectory || '\u2014'],
-    ['Gross Margin (TTM)',   fmtPct(v.gross_margin_ttm)],
-    ['Operating Margin',     fmtPct(v.operating_margin_ttm)],
-    ['Operating Cash Flow',  fmtCap(v.operating_cash_flow_ttm)],
-    ['Free Cash Flow',       fmtCap(v.free_cash_flow_ttm)],
-    ['Rule of 40',           v.rule_40_score != null ? v.rule_40_score.toFixed(1) : '\u2014'],
-    ['ROIC (TTM)',           fmtPct(v.roic_ttm)],
-    ['SVR',                  v.svr != null ? v.svr.toFixed(1)+'x' : '\u2014'],
-    ['SVR vs Sector',        v.svr_vs_sector_median != null ? v.svr_vs_sector_median.toFixed(2)+'x' : '\u2014'],
-    ['Sector Rank',          v.market_cap_rank_in_sector != null ? ('#'+v.market_cap_rank_in_sector+(v.sector_peers ? ' of '+v.sector_peers : '')) : '\u2014'],
-    ['Shares 3Y Growth',     fmtPct(v.shares_growth_3y)],
+    ['Revenue (TTM)',        fmtCap(v.revenue_ttm),                                                  null],
+    ['Revenue YoY',          fmtPct(v.revenue_yoy_growth),                                           'revenue_yoy_growth'],
+    ['Revenue 3Y CAGR',      fmtPct(v.revenue_3y_cagr),                                              'revenue_3y_cagr'],
+    ['Growth Trajectory',    v.growth_trajectory || '\u2014',                                       null],
+    ['Gross Margin (TTM)',   fmtPct(v.gross_margin_ttm),                                             'gross_margin_ttm'],
+    ['Operating Margin',     fmtPct(v.operating_margin_ttm),                                         'operating_margin_ttm'],
+    ['FCF Margin (TTM)',     fmtPct(v.fcf_margin_ttm),                                               'fcf_margin_ttm'],
+    ['Operating Cash Flow',  fmtCap(v.operating_cash_flow_ttm),                                      null],
+    ['Free Cash Flow',       fmtCap(v.free_cash_flow_ttm),                                           null],
+    ['Rule of 40',           v.rule_40_score != null ? v.rule_40_score.toFixed(1) : '\u2014',       'rule_40_score'],
+    ['ROIC (TTM)',           fmtPct(v.roic_ttm),                                                     'roic_ttm'],
+    ['SVR',                  v.svr != null ? v.svr.toFixed(1)+'x' : '\u2014',                       'svr'],
+    ['Sector Rank',          v.market_cap_rank_in_sector != null ? ('#'+v.market_cap_rank_in_sector+(v.sector_peers ? ' of '+v.sector_peers : '')) : '\u2014', null],
+    ['Shares 3Y Growth',     fmtPct(v.shares_growth_3y),                                             null],
     // Round 7c verification round 8: read canonical classifier fields
     // (v.sector / v.industry_group / v.industry) directly from the verdict
     // response. Pre-fix this row called broadSector(v.sic, v.sector) \u2014 a
     // JS-side SIC mapping that ignored TICKER_OVERRIDES and disagreed with
     // Leader Detector for GOOGL/META/NFLX/AMZN/AAPL/TSLA/V/MA. broadSector
     // stays in the file for any non-classifier code path that still wants it.
-    ['Sector',               v.sector || '\u2014'],
-    ['Industry Group',       v.industry_group || '\u2014'],
-    ['Industry',             v.industry || '\u2014'],
+    ['Sector',               v.sector || '\u2014',                                                  null],
+    ['Industry Group',       v.industry_group || '\u2014',                                          null],
+    ['Industry',             v.industry || '\u2014',                                                null],
   ];
-  const rowsHTML = rows.map(([l,val]) => `
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 10px;border-bottom:1px solid var(--border)">
+
+  // Round 7d / Commit 4: format a peer median value to match its company-value
+  // column. ETF detection via ETF_TICKERS membership (NOT classifier "Unknown")
+  // \u2014 they diverge on edge cases like BRK.B. The set is loaded async on app
+  // init (Commit 5); if it hasn't resolved before the first lookup, we fall
+  // back to numeric peer rendering rather than mis-blanking. Categorical rows
+  // (peerKey null) always render em-dash for visual rhythm.
+  const isETF = !!(window._etfTickersSet && v.symbol && window._etfTickersSet.has(v.symbol));
+  function fmtPeerVal(peerKey, label) {
+    if (peerKey == null) return '\u2014';
+    if (isETF) return '\u2014';
+    const raw = v['peer_median_' + peerKey];
+    if (raw == null) return '\u2014';
+    // Match the company-value formatter for the same row.
+    if (peerKey === 'svr') return raw.toFixed(1) + 'x';
+    if (peerKey === 'rule_40_score') return raw.toFixed(1);
+    // Everything else in the peer set is a percentage-typed metric
+    // (revenue_yoy_growth, revenue_3y_cagr, gross_margin_ttm,
+    //  operating_margin_ttm, fcf_margin_ttm, roic_ttm).
+    return fmtPct(raw);
+  }
+
+  const headerHTML = `
+    <div style="display:grid;grid-template-columns:1.4fr 1fr 1fr;column-gap:10px;align-items:center;padding:6px 10px;background:var(--bg-cell);border-bottom:1px solid var(--border)">
+      <span style="font-size:9px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase;font-weight:600">Metric</span>
+      <span style="font-size:9px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase;font-weight:600;text-align:right">Company</span>
+      <span style="font-size:9px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase;font-weight:600;text-align:right">Peer Median</span>
+    </div>`;
+  const rowsHTML = rows.map(([l, val, peerKey]) => `
+    <div style="display:grid;grid-template-columns:1.4fr 1fr 1fr;column-gap:10px;align-items:center;padding:5px 10px;border-bottom:1px solid var(--border)">
       <span style="font-size:11px;color:var(--text-dim);letter-spacing:0.3px">${l}</span>
-      <span style="font-size:12px;color:var(--text-secondary);font-family:var(--mono);font-weight:600">${val}</span>
+      <span style="font-size:12px;color:var(--text-secondary);font-family:var(--mono);font-weight:600;text-align:right">${val}</span>
+      <span style="font-size:12px;color:var(--text-dim);font-family:var(--mono);font-weight:500;text-align:right">${fmtPeerVal(peerKey, l)}</span>
     </div>`).join('');
 
   return `
@@ -1029,6 +1066,7 @@ function buildVerdictCard(v) {
       ${testRow}
     </div>
     <div style="background:var(--bg-cell);border-radius:8px;overflow:hidden">
+      ${headerHTML}
       ${rowsHTML}
     </div>
   </div>`;
