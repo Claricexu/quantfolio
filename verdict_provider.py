@@ -97,12 +97,28 @@ _FLOAT_COLS = (
     "gross_margin_ttm", "operating_margin_ttm",
     "operating_cash_flow_ttm", "free_cash_flow_ttm",
     "fcf_margin_ttm", "rule_40_score",
-    "roic_ttm", "svr", "svr_vs_sector_median",
+    "roic_ttm", "svr",
+    # Round 7d: per-metric industry_group peer medians written by
+    # fundamental_screener.apply_peer_medians. Float-typed for the verdict
+    # card's third-column comparison render. Empty string -> None when the
+    # bucket has <5 non-null values for that metric, or when the row has no
+    # industry_group (ETFs).
+    "peer_median_revenue_yoy_growth",
+    "peer_median_revenue_3y_cagr",
+    "peer_median_gross_margin_ttm",
+    "peer_median_operating_margin_ttm",
+    "peer_median_fcf_margin_ttm",
+    "peer_median_rule_40_score",
+    "peer_median_roic_ttm",
+    "peer_median_svr",
 )
 
 _INT_COLS = (
     "tests_passed", "tests_known",
     "market_cap_rank_in_sector", "sector_peers",
+    # Round 7d: industry_group bucket size (independent of per-metric coverage).
+    # Reserved for the future "n=12" tooltip on the verdict card peer column.
+    "peer_count",
 )
 
 _BOOL_COLS = (

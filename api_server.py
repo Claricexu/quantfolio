@@ -1377,6 +1377,13 @@ async def api_screener_symbol(symbol: str, refresh: bool = False):
         # endpoint is POST /api/screener/refresh and is a different surface.
         _verdict_provider.load_screener_index(force_reload=True)
     payload = _verdict_provider.load_verdict_for_symbol(symbol)
+    # Round 7d: surface the screener CSV mtime so the verdict card can render
+    # an "As of YYYY-MM-DD" chip. Scoped to this endpoint only — the
+    # /api/predict and /api/predict-compare surfaces deliberately do NOT
+    # carry this field (Layer 2 ML predictions are not bound to the screener
+    # CSV's mtime; surfacing it there would conflate two different data
+    # freshness signals).
+    payload["as_of_csv_mtime"] = _verdict_provider.get_csv_mtime_iso()
     return JSONResponse(payload)
 
 
