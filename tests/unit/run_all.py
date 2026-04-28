@@ -22,6 +22,7 @@ from tests.unit import (
     test_yfinance_http,
     test_predict_ticker_warnings,
     test_classifier,
+    test_peer_median,
 )
 
 
@@ -37,6 +38,7 @@ def main() -> int:
         ("test_yfinance_http", test_yfinance_http),
         ("test_predict_ticker_warnings", test_predict_ticker_warnings),
         ("test_classifier", test_classifier),
+        ("test_peer_median", test_peer_median),
     ):
         print(f"\n=== {name} ===")
         fails = mod.run_all()
