@@ -973,7 +973,7 @@ function buildVerdictCard(v) {
   // INSUFFICIENT_DATA branch which returns earlier above).
   const asOfLabel = fmtAsOf(v.as_of_csv_mtime);
   const asOfChipHTML = asOfLabel
-    ? `<span class="as-of-chip" title="${escapeHTML(asOfLabel)}" style="margin-left:0;margin-bottom:6px;display:inline-block">${escapeHTML(asOfLabel)}</span>`
+    ? `<span class="as-of-chip" title="${escapeHTML(v.as_of_csv_mtime || '')}" style="margin-left:0;margin-bottom:6px;display:inline-block">${escapeHTML(asOfLabel)}</span>`
     : '';
 
   const archetypeKey = (v.archetype || '').toUpperCase();
@@ -1083,6 +1083,7 @@ function buildVerdictCard(v) {
     <div style="background:var(--bg-cell);border-radius:8px;overflow:hidden">
       ${headerHTML}
       ${rowsHTML}
+      ${isETF ? `<div style="font-size:10px;color:var(--text-faint);padding:6px 10px;text-align:right">Peer median comparison not applicable for ETFs.</div>` : ''}
     </div>
   </div>`;
 }
