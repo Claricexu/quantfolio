@@ -268,16 +268,18 @@ def score_ticker(metrics):
     # Score (0–100)
     #   5 tests × 15 pts = 75 max from tests
     #   + 10 for no dealbreakers (if we have data)
-    #   + 5 each for three quality bonuses (ROIC ≥ 20%, R40 ≥ 40, SVR ≤ sector median)
+    #   + 5 each for two quality bonuses (ROIC ≥ 20%, R40 ≥ 40)
+    # Round 7d: dropped the SVR-vs-sector-median bonus alongside removal of
+    # `svr_vs_sector_median` from the CSV. Peer-median benchmarking now lives
+    # in the per-metric `peer_median_*` columns (industry_group buckets,
+    # min_peers=5) rather than as a scoring lever. Score drift on existing
+    # rows is bounded to -5 (rows previously hitting the bonus); see CHANGELOG.
     score = passes * 15
     if known > 0 and not any_dealbreaker:
         score += 10
     if (m.get('roic_ttm') or 0) >= 0.20:
         score += 5
     if (m.get('rule_40_score') or 0) >= 40.0:
-        score += 5
-    svr_rel = m.get('svr_vs_sector_median')
-    if svr_rel is not None and svr_rel <= 1.0:
         score += 5
     score = min(score, 100)
 
@@ -329,11 +331,17 @@ def _sector_key(m):
 
 def apply_sector_context(all_metrics, min_peers=3):
     """
-    Enrich each metrics dict with market_cap_rank_in_sector, svr_vs_sector_median,
-    and sector_peers, grouped by SIC 2-digit major group.
+    Enrich each metrics dict with market_cap_rank_in_sector and sector_peers,
+    grouped by SIC 2-digit major group.
 
     Sectors with fewer than `min_peers` tickers skip ranking (too noisy to be
     meaningful).
+
+    Round 7d: removed the SVR-vs-sector-median computation. The peer-median
+    benchmarking surface now lives in `apply_peer_medians` (called separately,
+    bucketed by `industry_group` not SIC-2, min_peers=5) which writes the
+    `peer_median_*` family of columns. The market-cap rank logic stays here
+    because it's still SIC-2 keyed and used by the LEADER/GEM verdict split.
     """
     buckets = {}
     for m in all_metrics:
@@ -358,18 +366,71 @@ def apply_sector_context(all_metrics, min_peers=3):
         for i, p in enumerate(ranked, 1):
             p['market_cap_rank_in_sector'] = i
 
-        # Sector SVR median (exclude missing)
-        svrs = [p['svr'] for p in peers if p.get('svr') and p['svr'] > 0]
-        if svrs:
-            med = median(svrs)
-            for p in peers:
-                if p.get('svr'):
-                    p['svr_vs_sector_median'] = p['svr'] / med
-
         for p in peers:
             p['sector_peers'] = sector_size
 
     return all_metrics
+
+
+# ─── Peer-median benchmarking (industry_group bucket, min_peers=5) ───────────
+
+# The 8 numeric metrics surfaced on the verdict card that have a meaningful
+# peer comparison. Categorical fields (Growth Trajectory) and absolute-magnitude
+# fields (Revenue TTM, OCF, FCF, Market Cap) are excluded by design.
+PEER_MEDIAN_METRICS = (
+    'revenue_yoy_growth',
+    'revenue_3y_cagr',
+    'gross_margin_ttm',
+    'operating_margin_ttm',
+    'fcf_margin_ttm',
+    'rule_40_score',
+    'roic_ttm',
+    'svr',
+)
+
+
+def apply_peer_medians(scored, min_peers=5):
+    """
+    Bucket rows by `industry_group` and compute peer medians for the 8 metrics
+    in `PEER_MEDIAN_METRICS`. Writes `peer_median_{metric}` back to each row
+    dict (None if fewer than `min_peers` non-null values for that metric in the
+    bucket). Also writes `peer_count` = the size of that row's industry_group
+    bucket (regardless of metric availability) so the verdict card can render
+    "n=12" tooltips later.
+
+    Rows with no `industry_group` (ETFs, classifier gaps) get neither
+    `peer_median_*` nor `peer_count` written — they remain absent so the CSV
+    serialization emits empty strings.
+
+    Round 7d: bucketing is by industry_group (29 fine-grained groups, all
+    ≥5 members per classifier.py:11) rather than SIC-2, so peer comparisons
+    are tight (Semiconductors vs all of "37" Transportation Equipment).
+    """
+    buckets = {}
+    for m in scored:
+        ig = m.get('industry_group')
+        if not ig:
+            continue
+        buckets.setdefault(ig, []).append(m)
+
+    for ig, peers in buckets.items():
+        bucket_size = len(peers)
+        # peer_count is the bucket size — independent of per-metric coverage.
+        for p in peers:
+            p['peer_count'] = bucket_size
+
+        for metric in PEER_MEDIAN_METRICS:
+            values = [p[metric] for p in peers
+                      if p.get(metric) is not None]
+            if len(values) < min_peers:
+                med = None
+            else:
+                med = median(values)
+            col = f'peer_median_{metric}'
+            for p in peers:
+                p[col] = med
+
+    return scored
 
 
 # ─── Full screen ──────────────────────────────────────────────────────────────
@@ -387,6 +448,11 @@ def run_full_screen(symbols=None, conn=None):
     raw = [compute_metrics(s, conn=conn) for s in symbols]
     apply_sector_context(raw)
     scored = [score_ticker(m) for m in raw]
+    # Round 7d: peer medians run AFTER scoring (industry_group is set during
+    # compute_metrics via classifier.classify, so it's available on `raw`
+    # already, but we run on `scored` to keep the writeback site obvious to
+    # future readers — every column the CSV emits is touched in this function).
+    apply_peer_medians(scored)
 
     scored.sort(key=lambda m: (
         -(m.get('good_firm_score') or 0),
@@ -471,7 +537,7 @@ CSV_OUT_FIELDS = [
     'gross_margin_ttm', 'operating_margin_ttm',
     'operating_cash_flow_ttm', 'free_cash_flow_ttm',
     'fcf_margin_ttm', 'rule_40_score',
-    'roic_ttm', 'svr', 'svr_vs_sector_median', 'pe_trailing',
+    'roic_ttm', 'svr', 'pe_trailing',
     'flag_diluting', 'flag_burning_cash', 'flag_spac_or_microcap',
     # Bucket 2 (2026-04-21): serialized per-test + dealbreaker maps so the
     # verdict card's test-dot row + flag chips can render from CSV alone
@@ -486,6 +552,22 @@ CSV_OUT_FIELDS = [
     # schema-position change. Two new columns appended; no existing column
     # renamed or reordered.
     'industry_group', 'industry',
+    # Round 7d: 8 peer-median columns + bucket size, computed by
+    # `apply_peer_medians` (industry_group bucket, min_peers=5). Empty on
+    # rows with no industry_group (ETFs, classifier gaps) or whose bucket
+    # has <5 non-null values for the metric. `peer_count` = total bucket
+    # size; reserved for future "n=12" tooltip on the verdict card.
+    # `svr_vs_sector_median` was removed in this round (the SIC-2 ratio is
+    # superseded by the industry_group peer median for SVR specifically).
+    'peer_median_revenue_yoy_growth',
+    'peer_median_revenue_3y_cagr',
+    'peer_median_gross_margin_ttm',
+    'peer_median_operating_margin_ttm',
+    'peer_median_fcf_margin_ttm',
+    'peer_median_rule_40_score',
+    'peer_median_roic_ttm',
+    'peer_median_svr',
+    'peer_count',
 ]
 
 

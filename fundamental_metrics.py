@@ -479,9 +479,11 @@ def compute_metrics(symbol, sector_context=None, conn=None):
     div_yield = get_dividend_yield(symbol)
     svr = (mcap / rev_ttm) if (mcap and rev_ttm and rev_ttm > 0) else None
 
-    sector_svr_median = (sector_context or {}).get('sector_svr_median')
+    # Round 7d: dropped sector_svr_median ratio. SVR peer comparison now lives
+    # in `peer_median_svr` (industry_group bucket, computed by
+    # fundamental_screener.apply_peer_medians). sector_context still carries
+    # the rank used by the LEADER/GEM verdict split.
     sector_rank = (sector_context or {}).get('sector_rank')
-    svr_vs_sector = (svr / sector_svr_median) if (svr and sector_svr_median) else None
 
     # ── Dealbreaker flags ──
     # Phase 1.7c: dilution check uses `WeightedAverageSharesBasic` (annual
@@ -528,7 +530,6 @@ def compute_metrics(symbol, sector_context=None, conn=None):
         'roic_ttm': roic_ttm,
         # Valuation
         'svr': svr,
-        'svr_vs_sector_median': svr_vs_sector,
         'pe_trailing': _get_trailing_pe(symbol),
         # Dealbreaker flags
         'flag_diluting': flag_diluting,
@@ -565,7 +566,6 @@ def _empty_metrics(symbol, info):
         'market_cap_rank_in_sector': None,
         'roic_ttm': None,
         'svr': None,
-        'svr_vs_sector_median': None,
         'pe_trailing': _get_trailing_pe(symbol),
         'flag_diluting': None,
         'shares_growth_3y': None,
