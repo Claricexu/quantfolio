@@ -1,6 +1,7 @@
+
 ## 2026-04-27 — Round 7c-2
 
-- Replaced the redundant Sector card on Ticker Lookup with a P/E (Price-to-Earnings) card. Sector and Industry information remain available on the Verdict card below.
+- Replaced redundant Sector card on Ticker Lookup with a P/E (Price-to-Earnings) card. Sector and Industry information remain available on the Verdict Card below. P/E shows trailing P/E ratio with em-dash fallback for negative earnings or missing data.
 
 ## 2026-04-25 — Round 7a
 

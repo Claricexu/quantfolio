@@ -124,3 +124,6 @@ Add entries here as you notice things during daily use. When a round is ready, p
 - **FB-8** — Strategy comparison chart expands inline beneath clicked library row. Shipped Round 7a (commit 04842f2).
 - **FB-6** — Strategy Lab defaults to Daily Report symbols. Shipped Round 7b (commit 02d1636).
 - **FB-7** — Daily Report banner aggregates per-date close prices; per-row "As of" column removed. Shipped Round 7b (commits 3f68a94, cdc0a4a).
+- **FB-1 (data half)** — Classifier module + canonical 10-sector / 29-industry-group taxonomy. Shipped Round 7c (commits 9ff08ad through 3638c86 chain). Display half (peer benchmarking column) deferred to Round 7d.
+- **FB-5** — Industry Group filter chips on Leader Detector. Shipped Round 7c.
+- **FB-10** — Sector Card on Ticker Lookup replaced with P/E Card. Shipped Round 7c-2 (commit 3dac116).
