@@ -1,332 +1,162 @@
-# Quantfolio — Iteration Plan V2
+# Quantfolio — Iteration Plan V2 (Refreshed)
 
-**Scope:** the next four rounds (7a through 7d), derived from user feedback after real use of Quantfolio through the Round 6 shipped state.
+**Scope:** Rounds 7a through 7d — UX refinement and classification correctness based on owner feedback after Round 6.
 
-**Starting point:** `main` at the post-Round-5/6 merge. Code pointers re-checked against HEAD on 2026-04-24.
+**Starting point:** main at the post-Round-6 merge.
 
-**Prior context:**
-- `ITERATION_PLAN.md` (now complete) covered Rounds 4-6 — reliable data fetching, stale-feature warning, Pro model banner.
-- `NEXT_ROUNDS.md` is the long-range backlog memo.
-- `FEATURE_BACKLOG.md` has FB-1 through FB-8 (this plan's scope maps to most of them).
-- `PATTERNS.md` P-1 (respect `[hidden]` in CSS display rules) — reference in any prompt that adds a new UI element with default-hidden state.
-
-**Out of scope** (tracked but not in this plan):
-- H-2, H-4, H-5 — deferred per NEXT_ROUNDS.md
-- ML methodology review — separate iteration
-- Security audit — separate iteration
+**Last refreshed:** 2026-04-27 (after Round 7c-2 merge). Original plan was written 2026-04-24; this revision marks shipped rounds and refines remaining scope.
 
 ---
 
-## Shape of this iteration
+## Iteration shape
 
-Seven user items plus one diagnosed issue (SVR transparency, became FB-4). Grouped by dependency and pattern:
+Originally planned as four rounds (7a, 7b, 7c, 7d). Reality shipped as five rounds (7a, 7b, 7c, 7c-2, with 7d still pending) because Round 7c surfaced a UX redundancy (the Sector card on Ticker Lookup) that warranted its own focused round.
 
-- **Items 2 and 6** share the "expand inline near clicked row" pattern → single round.
-- **Items 4 and 5** are small Daily Report polish → single round.
-- **Items 1 and 7** are data-pipeline coupled → two rounds (data infrastructure, then display).
-- **Item 3** turned out to be UI transparency → folded into Round 7d as FB-4.
-
-Four rounds:
-
-| Round | Scope | Effort | Risk |
+| Round | Scope | Status | Outcome |
 |---|---|---|---|
-| 7a | Inline expansion for verdict card + strategy comparison (FB-2, FB-8) | 2-3 h | Low |
-| 7b | Daily Report polish (FB-6, FB-7) | 1-2 h | Low |
-| 7c | Classifier module + Industry Group filter (FB-1 data half, FB-5) | 3-4 h | Medium |
-| 7d | Peer benchmarking column + timestamp chip (FB-1 display half, FB-4) | 3-4 h | Medium |
-
-**Total:** 9-13 hours. 7a/7b are low-risk frontend wins; 7c lays data infrastructure; 7d consumes it.
-
----
-
-## Round 7a — Inline expansion for verdict card + strategy comparison
-
-**User intent:** Stop losing scroll position. When I click a ticker row, show detail near the row, not at a fixed location on the page.
-
-**Scope:**
-
-**A. Verdict card (FB-2):**
-- Currently renders at fixed top of each tab.
-- On Daily Report and Leader Detector, clicking a ticker row expands the verdict card inline beneath that row. Ticker Lookup keeps its current near-the-Predict-button placement.
-- Multi-click: clicking a second row collapses the first card, expands the second. One open at a time.
-- Clicked row auto-scrolls into view after expansion.
-
-**B. Strategy Lab comparison chart (FB-8):**
-- Currently renders at bottom of Strategy Lab.
-- Expand inline beneath the clicked library row. Same behavior model as verdict card.
-
-**Files:** `frontend/index.html` only.
-
-**Constraints:**
-- Below ~640px viewport, fall back to modal overlay (piggyback on existing responsive breakpoints).
-- Preserve keyboard accessibility — focus moves to expanded card.
-- **Reference PATTERNS.md P-1** if new default-hidden elements added.
-
-**Commits:** Two.
-1. `feat: verdict card expands inline beneath clicked row on Daily Report and Leader Detector (FB-2)`
-2. `feat: strategy comparison chart expands inline beneath clicked library row (FB-8)`
-
-**Verification:** Manual click-through on all affected surfaces. Hard-refresh after each commit.
-
-**Team:** Single agent (sophia).
+| 7a | Inline expansion (FB-2, FB-8) + backend cache fix | Shipped 2026-04-25 | 13+ commits across 6 verification rounds |
+| 7b | Daily Report polish (FB-6, FB-7) | Shipped 2026-04-25 | 5 commits, one regression patch |
+| 7c | Classifier module + Industry Group filter (FB-1 data, FB-5) | Shipped 2026-04-27 | 11+ commits across multiple sessions; included source-fix arc |
+| 7c-2 | Sector → P/E card swap | Shipped 2026-04-27 | 5 commits, one verification round |
+| 7d | Peer benchmarking + timestamp + layout refactor (FB-1 display, FB-4) | Pending | 3-4 hours estimated, three-agent team |
 
 ---
 
-## Round 7b — Daily Report polish
+## Round 7a — Inline expansion + backend cache fix [SHIPPED]
 
-**User intent:** Banner should be honest about as-of dates; table shouldn't repeat information; Strategy Lab should default to the symbols I actually care about.
+**What shipped:**
+- Verdict card expands inline beneath clicked row on Daily Report and Leader Detector (FB-2). One card open at a time. Auto-scroll into view. Modal fallback below 640px.
+- Strategy comparison chart expands inline beneath clicked library row on Strategy Lab (FB-8). Same one-open pattern.
+- Six verification rounds patched: card clipping (sticky positioning fix), cache for re-clicks, missing × button on Daily Report, loading skeleton, Leader Detector close-path layout-flush freeze, and the unrelated weekend-aware cache freshness fix.
+- Backend: weekend-aware cache freshness via `_is_cached_report_acceptable` and `_scheduled_run_occurred_between` helpers. Cold-start fallback to disk via `_load_latest_report_from_disk`. Friday's report stays valid through Monday 4:05pm.
 
-**Scope:**
-
-**A. Strategy Lab default (FB-6):**
-- Strategy Lab defaults to showing only symbols that appear in the current Daily Report.
-- If no Daily Report cached, falls back to current default with notice: "No Daily Report data yet — showing all cached backtest symbols. Run Daily Report first for a focused list."
-- Frontend-only client-side filter.
-
-**B. Remove per-row "As of" column (FB-7 part 1):**
-- Redundant information when most rows share the same date.
-
-**C. Daily Report banner improvement (FB-7 part 2):**
-- Current: `Report generated: <Date, Time> | <X> symbols analyzed`
-- New (multi-date): `Report generated: <Date, Time> | <X> symbols analyzed | <N1> symbols' close price as of <Date1>, <N2> symbols' close price as of <Date2>`
-- New (single-date): `Report generated: <Date, Time> | <X> symbols analyzed | Close prices as of <Date>`
-- Data already in `/api/report`; client aggregates.
-
-**Files:** `frontend/index.html` only.
-
-**Commits:** Two.
-1. `feat: Daily Report banner aggregates per-date close prices; remove redundant per-row column (FB-7)`
-2. `feat: Strategy Lab defaults to Daily Report symbols (FB-6)`
-
-**Verification:**
-- Mixed-date set: banner shows split.
-- Single-date set: banner shows unified text.
-- Strategy Lab with/without cached Daily Report: behavior correct.
-
-**Team:** Single agent (skipper).
+**Lessons captured:**
+- PATTERNS.md P-2 — avoid synchronous layout flushes after mutating large tables (1,414 rows × 9 columns = 12,700 cells; each focus()/scrollIntoView() call forces full re-measure).
+- All-surfaces verification: the × button missing-on-Daily-Report bug taught us to enumerate UI surfaces explicitly.
 
 ---
 
-## Round 7c — Classifier module + Industry Group filter
+## Round 7b — Daily Report polish [SHIPPED]
 
-**User intent:** Codify the three-tier classification (sector → industry_group → industry) as Python logic, not a CSV. Surface industry_group as a filter.
+**What shipped:**
+- Strategy Lab defaults to Daily Report symbols (FB-6). Override toggle for showing all symbols. Session-only, not persisted across reloads.
+- Daily Report banner aggregates per-date close prices across symbols (FB-7). Multi-date case shows breakdown; single-date case shows unified text.
+- Per-row "As of" column removed from all three Daily Report tables (HIGH-CONFIDENCE BUY, HIGH-CONFIDENCE SELL, ALL SYMBOLS).
 
-**Depends on:** Nothing. Can run independently of 7a/7b.
-
-**Scope:**
-
-**A. New module `classifier.py` — pure function, no app dependencies:**
-
-```python
-def classify(symbol: str, sic: str | int | None, sic_description: str | None) -> tuple[str, str, str]:
-    """Returns (sector, industry_group, industry).
-    
-    Three-tier hierarchy:
-      - sector: broad navigation (10 sectors)
-      - industry_group: used for peer-median benchmarking (29 groups, all >=5 members)
-      - industry: finer display label
-    
-    Rules:
-      1. Ticker-level overrides first (TICKER_OVERRIDES dict).
-      2. Otherwise, map SIC -> (sector, industry_group, industry) via rule table.
-      3. Unclassified SIC returns ("Unknown", "Unknown", f"SIC {sic}").
-    """
-```
-
-**Ticker overrides (canonical — matches user's classification decisions):**
-
-```python
-TICKER_OVERRIDES = {
-    # Digital media giants — industry_group = Telecom & Media for peer math
-    # (34-ticker pool), industry = Interactive Media preserves business granularity.
-    "GOOGL": ("Communication Services", "Telecom & Media", "Interactive Media"),
-    "GOOG":  ("Communication Services", "Telecom & Media", "Interactive Media"),
-    "META":  ("Communication Services", "Telecom & Media", "Interactive Media"),
-    "NFLX":  ("Communication Services", "Telecom & Media", "Interactive Media"),
-
-    # Mega-caps with misleading SIC codes.
-    "AMZN":  ("Consumer Discretionary", "Retail & Restaurants", "Retail"),
-    "AAPL":  ("Technology", "Hardware & Equipment", "Tech Hardware & Networking"),
-    "TSLA":  ("Consumer Discretionary", "Autos & Components", "Automobiles & Components"),
-
-    # Payment networks in Financials.
-    "V":     ("Financials", "Capital Markets", "Payments"),
-    "MA":    ("Financials", "Capital Markets", "Payments"),
-}
-```
-
-**10 sectors:** Communication Services, Consumer Discretionary, Consumer Staples, Energy, Financials, Healthcare, Industrials, Materials, Technology, Utilities.
-
-**29 industry groups** (all ≥5 members — user merged "Interactive Media & Services" 3-ticker group into Telecom & Media for peer math viability): Telecom & Media, Hotels/Restaurants/Leisure, Retail & Restaurants, Autos & Components, Apparel/Leisure Goods/Home Furnishings, Hardware & Equipment, Software & IT Services, Semiconductors, Pharmaceuticals, Medical Devices & Instruments, Healthcare Services, Capital Markets, Insurance, Food/Beverage/Tobacco, Household & Personal Products, Oil/Gas/Coal E&P/Services, Oil & Gas Refining/Midstream, Chemicals, Metals/Mining/Steel, Paper/Packaging/Building Materials, Machinery & Equipment, Aerospace & Defense, Transportation & Logistics, Professional & Commercial Services, Construction & Engineering, Wholesale Trade, Electric & Other Utilities, Electrical Equipment, Agriculture & Agricultural Products.
-
-**B. Pipeline integration:**
-- `fundamental_screener.py` — call `classify()` when writing `screener_results.csv`; add `sector`, `industry_group`, `industry` columns. Existing columns unchanged.
-- `verdict_provider.py` — include classification fields in the verdict response.
-- `leader_selector.py` — fields available but no behavior change this round.
-
-**C. Industry Group filter on Leader Detector (FB-5):**
-- Add Industry Group filter chip row below the existing Sector chip row.
-- Filters are AND. Selecting Sector=Technology + Industry Group=Semiconductors narrows correctly.
-- Each Industry Group chip shows count within the current filtered view.
-
-**Files:**
-- `classifier.py` (new)
-- `tests/unit/test_classifier.py` (new, 9 tests)
-- `fundamental_screener.py` (add columns)
-- `verdict_provider.py` (pass through)
-- `frontend/index.html` (filter chips)
-- `DEVELOPMENT.md` (document in §2)
-
-**Tests (9 cases):**
-- `test_classify_apple_is_tech_hardware_and_networking` — AAPL override
-- `test_classify_alphabet_industry_group_is_telecom_media_industry_is_interactive_media` — GOOGL override, validates two-tier granularity
-- `test_classify_amazon_is_retail` — AMZN override
-- `test_classify_tesla_is_autos_and_components` — TSLA override
-- `test_classify_by_sic_pharma` — SIC 2834 → Healthcare / Pharmaceuticals
-- `test_classify_by_sic_oil_gas_ep` — SIC 1311 → Energy / Oil, Gas & Coal E&P / Services
-- `test_classify_unclassified_sic_returns_unknown` — unmapped SIC returns ("Unknown", "Unknown", "SIC <N>")
-- `test_classify_is_deterministic_for_same_input` — idempotent
-- `test_classify_null_sic_returns_unknown` — robust to None/empty
-
-**Constraints:**
-- `classifier.py` has zero imports from app modules. Leaf module.
-- Ticker override dict is a module-level constant, not a config file.
-- `fundamental_screener.py` must emit existing columns unchanged. Additive only.
-- For most SIC codes, `industry_group == industry` (e.g., Semiconductors). For override tickers, they may differ (GOOGL has Telecom & Media / Interactive Media). Downstream code treats them as independent fields.
-
-**Commits:** Three.
-1. `feat: classifier module with SIC + ticker-override rules, 10 sectors and 29 industry groups (FB-1 data half)`
-2. `feat: fundamental_screener writes sector/industry_group/industry; verdict_provider surfaces fields`
-3. `feat: Industry Group filter chips on Leader Detector tab (FB-5)`
-
-**Verification:**
-- All 50 tests pass (41 existing + 9 new classifier tests).
-- Re-run `leader_selector.py --build` to regenerate `leaders.csv` with new fields.
-- Manual: Leader Detector filter chips work; selecting Technology + Semiconductors gives expected count.
-- Manual: search for GOOGL in screener data, confirm `industry_group = "Telecom & Media"` and `industry = "Interactive Media"`.
-
-**Team:** Three-agent.
-- **wright** reviews `classifier.py` API design before code is written.
-- **skipper** writes module, tests, pipeline integration.
-- **sophia** reviews Industry Group filter UX.
-
-**Risk and mitigation:**
-- Classification drift from override mistakes → 9 unit tests pin canonical overrides.
-- `fundamental_screener.py` backward compat → existing columns unchanged (constraint above).
-- GOOGL/META/NFLX peer medians distorted by traditional media in Telecom & Media → "Industry: Interactive Media" label signals this. No silent treatment.
+**Lessons captured:**
+- PATTERNS.md P-3 — single-line PowerShell git commit messages on Windows. Multi-line here-strings break shell quoting in subtle ways.
+- PATTERNS.md P-4 — trace caller chains, not just function bodies. The As-of column removal initially patched only the row renderer, not the shared `buildReportTable` header construction that decorates the column for all three tables.
 
 ---
 
-## Round 7d — Peer benchmarking column + verdict card timestamp
+## Round 7c — Classifier module + Industry Group filter [SHIPPED]
 
-**User intent:** Make the verdict card self-explaining (peer context) and honest about data freshness (timestamp).
+**What shipped:**
+- `classifier.py` — pure Python module. Function `classify(symbol, sic, sic_description) → (sector, industry_group, industry)`. Hand-crafted `TICKER_OVERRIDES` for 9 mega-caps (GOOGL, GOOG, META, NFLX, AMZN, AAPL, TSLA, V, MA). 10 sectors. 29 industry groups (originally 30; "Interactive Media & Services" merged into "Telecom & Media" so all groups have ≥5 members for peer math). 9 unit tests.
+- Source-fix in `fundamental_metrics.py:486` — renamed `m['sector'] = info.get('sic_description')` to `m['sic_description']`. Removed the upstream mislabeling that had been silently corrected downstream by `fundamental_screener.py`. Cleaner data semantics throughout.
+- `fundamental_screener.py` — calls `classify()`, writes `sector / industry_group / industry / sic_description` columns to `screener_results.csv`.
+- `verdict_provider.py` — surfaces classifier fields in verdict response.
+- `api_server.py` — `_inject_classifier_fields` overlays canonical values on `/api/predict` and `/api/predict-compare` responses (the parallel pipeline).
+- Frontend: verdict card and Leader Detector Sector column read canonical fields. JS-side `broadSector(sic, ...)` retained as legacy-CSV fallback only.
+- Industry Group filter chips on Leader Detector below Sector dropdown (FB-5). AND-combined with Sector filter. Chip counts update with filter context.
+- Industry tier returns `sic_description` for non-override tickers; falls back to `industry_group` when description missing. Override tickers continue to use hand-crafted industry value.
 
-**Depends on:** Round 7c (industry_group field must exist on screener rows).
-
-**Scope:**
-
-**A. Peer benchmark column (FB-1 display):**
-- Verdict card gets a third column: peer median for the same industry_group.
-- Metrics with peers: Revenue YoY, Revenue 3Y CAGR, Gross Margin (TTM), Operating Margin, Rule of 40, ROIC (TTM), SVR, Sector Rank.
-- Metrics without peers (no meaningful median): Revenue (TTM), Operating Cash Flow, Free Cash Flow, Growth Trajectory (categorical), Shares 3Y Growth, Sector (label itself).
-- With 29 industry groups all ≥5 members, no "insufficient peers" case to handle.
-
-**B. Unified verdict card across all three tabs:**
-- Ticker Lookup, Daily Report, Leader Detector → identical card shape and data.
-- Audit the three rendering paths, consolidate to one function reading from `verdict_provider`.
-
-**C. Verdict card timestamp chip (FB-4):**
-- Small "As of YYYY-MM-DD" chip in the card header.
-- Value from `screener_results.csv` mtime, or explicit `snapshot_date` field if exists, else `fundamentals.db` last-refresh.
-- Reuse existing "CACHED" chip CSS family from the big SVR card.
-
-**Files:**
-- `verdict_provider.py` — peer median computation, snapshot_date.
-- `frontend/index.html` — card rendering consolidation, peer column, timestamp chip.
-- `tests/unit/test_verdict_provider.py` (new or extended) — 4 tests.
-
-**Tests (4 cases):**
-- `test_peer_median_returns_median_of_industry_group` — fixture with semiconductor rows, verify median.
-- `test_peer_median_handles_missing_metric` — sparse data: median of what's present; all-missing returns None.
-- `test_peer_median_uses_industry_group_not_sector` — GOOGL gets Telecom & Media peers, not all of Communication Services.
-- `test_snapshot_date_from_csv_mtime` — fallback when no explicit snapshot field.
-
-**Constraints:**
-- Cache peer medians in-memory at `verdict_provider` load. Invalidate on `screener_results.csv` mtime change.
-- Timestamp chip and peer medians pull from the same source (one snapshot).
-- **Reference PATTERNS.md P-1** for any new default-hidden UI.
-
-**Commits:** Three.
-1. `feat: verdict_provider computes per-industry-group peer medians (FB-1 display half)`
-2. `feat: verdict card shows peer median column beside company value`
-3. `feat: verdict card shows 'As of' timestamp chip (FB-4)`
-
-**Verification:**
-- Manual: NVDA verdict card → Revenue YoY 65.5% beside Semiconductors peer median. Reveals Leader status clearly.
-- Manual: GOOGL verdict card → industry_group "Telecom & Media," industry "Interactive Media," peer median from 34-ticker Telecom & Media pool. Expect GOOGL to show high positive deviation on margins — accurate, and the industry label explains why.
-- Manual: timestamp chip shows `YYYY-MM-DD` matching `screener_results.csv` mtime.
-- All tests pass (50 + 4 new = 54).
-- Card shape identical across Ticker Lookup, Daily Report, Leader Detector.
-
-**Team:** Two agents.
-- **skipper** for `verdict_provider.py` peer computation + caching.
-- **sophia** for card rendering consolidation across three tabs.
+**Lessons captured:**
+- Architecture pattern: parallel pipelines silently bypass new integrations (`/api/predict-compare` didn't go through `verdict_provider`; frontend `broadSector` competed with Python classifier). Future integrations need to enumerate all parallel pipelines explicitly.
+- Spot-check methodology: pick tickers whose classification differs across systems to expose integration gaps. Override-only tests miss non-override regressions.
+- Deferred timezone bug: `_run_dual_report` writes naive timestamps; the cache-freshness helper assumes naive = America/New_York. Correct on the owner's EST Windows machine; must fix before any non-EST deployment. 4-line fix in two write sites.
 
 ---
 
-## Sequencing and merge strategy
+## Round 7c-2 — Sector → P/E card swap [SHIPPED]
 
-**Order:**
-1. Round 7a — inline expansion (low risk, high visibility).
-2. Round 7b — Daily Report polish (low risk, quick wins).
-3. Round 7c — classifier (data infrastructure).
-4. Round 7d — peer benchmarking + timestamp (consumes 7c).
+**What shipped:**
+- Backend: `pe_trailing` column added through fundamental_metrics → fundamental_screener → screener_results.csv → API responses.
+- Frontend: Sector card on Ticker Lookup (the 4th card in the SVR / Market Cap / Quarterly Revenue / Sector row) replaced with a P/E card. The Verdict Card below provides Sector / Industry Group / Industry, making the standalone Sector card redundant.
+- Display: P/E formatted as `{value.toFixed(1)}x` for values < 100, `{Math.round(value)}x` for ≥ 100. Em-dash fallback for negative earnings, missing data, ETFs without P/E, and pathological values.
+- Touchups during the round (sophia review): P/E font size set to 15px (peer with Market Cap and Quarterly Revenue, not SVR's 20px headline weight). SVR card renders at full size with em-dash when N/A, matching the populated-state visual weight.
 
-**Branching:** Each round on its own branch (`agent-round7a`, `agent-round7b`, `agent-round7c`, `agent-round7d`). Merge each to `main` after verification, before starting the next.
+**Lessons captured:**
+- "Patching code that's about to be deleted is wasted effort" — the redundant Sector card had a Yahoo-vs-classifier inconsistency we initially planned to patch, then realized deletion was the right fix instead. Documented as a known issue in summary, then resolved through the swap.
 
-**CHANGELOG:** One entry per round, ideally in the round's doc pass. Catch up in the next round if skipped.
-
----
-
-## Iteration-wide verification
-
-After all four rounds merge:
-
-- [ ] All tests pass (target: ~54 tests).
-- [ ] Daily Report banner shows per-date breakdown correctly.
-- [ ] Daily Report "As of" column gone.
-- [ ] Strategy Lab defaults to Daily Report symbols.
-- [ ] Click row on Daily Report → verdict card expands inline.
-- [ ] Leader Detector has both Sector and Industry Group filter chips.
-- [ ] Verdict card shows peer median column.
-- [ ] Verdict card shows timestamp chip.
-- [ ] Card shape identical on Ticker Lookup, Daily Report, Leader Detector.
-- [ ] NVDA: big SVR card and verdict card SVR consistent OR clearly timestamped (item 3 resolution).
-- [ ] GOOGL: industry_group = "Telecom & Media," industry = "Interactive Media," peer medians from 34-ticker pool.
+**Deferred to Round 7d:**
+- ETF P/E tooltip — sophia recommended `title="Weighted average of holdings"` on the P/E value when isETF. Acceptable to defer; will be addressed alongside the verdict card layout refactor in 7d.
 
 ---
 
-## Workflow notes (from Rounds 1-6)
+## Round 7d — Peer benchmarking + timestamp chip + layout refactor [PENDING]
 
-- **Reference PATTERNS.md P-1 in UI-touching prompts.** `[hidden]` CSS override has bitten twice.
-- **Sandbox test runs are advisory, not authoritative.** User runs `pytest` locally to confirm.
-- **Test-first for data-layer changes.** 7c classifier ships with tests in the same commit.
-- **Atomic commits per feature.** Revertable.
-- **Manual UI verification mandatory** for 7a, 7b, 7d. 7c still warrants filter-chip click-through.
+**Goal:** Turn the verdict card from a data display into a comparison tool. Each metric shown alongside its industry-group peer median, with a clear "as of" timestamp.
+
+**Three-agent team likely:** wright reviews architecture (where peer-median computation lives), skipper implements, sophia reviews visual hierarchy.
+
+**Estimated effort:** 3-4 hours of agent work. One or two verification cycles.
+
+### Scope
+
+**A. Peer benchmarking column on the verdict card.**
+
+For each metric in the verdict card (Revenue YoY, Revenue 3Y CAGR, Gross Margin TTM, Operating Margin, ROIC TTM, Rule of 40, FCF Margin), display the company's value alongside the peer median for its industry group. Visual: progress bar or percentile indicator showing where this company sits in its peer distribution.
+
+Architectural decision required: peer median computed server-side at API response time (cached per industry group), or client-side from the screener data already in the browser. Wright should weigh tradeoffs in Phase 1.
+
+**B. Timestamp chip on the verdict card.**
+
+Small "As of YYYY-MM-DD" indicator showing when the underlying data was last refreshed (i.e., when the screener last ran for this ticker). Helps users distinguish stale data from fresh.
+
+**C. Verdict card layout refactor.**
+
+Sophia flagged in Round 7c that the current verdict card uses two-column flex (label | value). Adding the peer-median column requires three columns (label | company value | peer median). For rows where peer median doesn't apply (Sector, Industry Group, Industry), the third column shows em-dash without alignment collapse. CSS Grid handles this cleanly; flex doesn't.
+
+**D. Rolled-in: ETF P/E tooltip from Round 7c-2.**
+
+Add `title="Weighted average of holdings"` to the P/E value on the four-card row when the ticker is an ETF. Small frontend addition during the layout work.
+
+### Things to decide in the prompt
+
+- **Peer median computation location:** server-side caching vs client-side aggregation. Server-side is simpler API design, client-side is faster for filter changes. Wright reviews tradeoffs.
+- **Visual treatment of peer comparison:** raw values side-by-side, percentile rank, progress bar with median marker, or some combination. Sophia reviews visual hierarchy.
+- **What metrics show peer comparison vs not:** Sector / Industry Group / Industry are categorical (no peer median possible). Numeric metrics get peer columns. Edge cases: Rule of 40 (composite score), Growth Trajectory (categorical text). Decide ahead of implementation.
+- **Layout refactor scope:** two-column flex → three-column grid is the structural change. Should existing verdict card metrics keep their current visual style, or get a coordinated polish? Bias toward minimal: only change what the peer column requires.
+- **ETF handling for peer comparison:** ETFs don't have meaningful peer groups in our taxonomy. Either show em-dash in the peer column for ETFs, or skip the peer column entirely for ETFs. Probably em-dash for visual consistency with non-ETF cases where peer median is missing.
+
+### Constraints (lessons from earlier rounds)
+
+- Reference PATTERNS.md P-1, P-2, P-3, P-4 in the prompt.
+- Verify data shape with `Get-Content -TotalCount 1` before assuming column existence.
+- Spot-check both override and non-override tickers; verify both Verdict Card and Sector Card surfaces; verify Daily Report and Leader Detector inline expansion still works.
+- Single-line PowerShell commit messages.
+- Test-first for any new computation (peer median aggregation deserves unit tests).
+
+### Verification gates
+
+- Existing 51 tests still pass.
+- New peer-median computation has unit tests (likely 4-6 tests covering: median of group, missing-data handling, ETF case, sector mismatch).
+- Manual UI spot check across 4-6 ticker types: profitable non-override (NVDA), profitable override (GOOGL), loss-making (RIVN), high-percentile-rank ticker (test "you're in the top 10% for ROIC" reads correctly), ETF (SPY).
 
 ---
 
-## File references
+## Out of scope for this iteration
 
-- `NEXT_ROUNDS.md` — long-range backlog
-- `FEATURE_BACKLOG.md` — FB-1 through FB-8
-- `PATTERNS.md` — engineering patterns (P-1 for UI)
-- `audit-findings.md` — Round 1 frozen record
-- `round*-summary.md` — historical round summaries
-- `CHANGELOG.md` — release notes
-- `classifier.py` — (new in 7c) classification logic
-- `verdict_provider.py` — (extended in 7d) peer medians
+These items are tracked for future rounds but not part of 7a-7d:
+
+- **Polish/a11y consolidation round** — ~30 deferred items from rounds 7a-7c-2 (aria attributes, prefers-reduced-motion, mobile chip-row, etc.). Should ship as a batch in a dedicated round.
+- **Latent timezone bug** — `_run_dual_report` writes naive timestamps. 4-line fix in two write sites. Defer until non-EST deployment is contemplated.
+- **H-2** through **H-17** items from the original Round 1 audit (`audit-findings.md`) — most still open. Address in a future audit-followup round.
+- **ML methodology review** — separate iteration entirely. Not a round, a project.
+- **Security audit** — separate iteration. Not a round, a project.
 
 ---
 
-Written 2026-04-24 after Round 5/6 merged and user-driven feedback. Revised to reflect 29 industry groups (Interactive Media & Services merged into Telecom & Media per user direction) and canonical ticker overrides.
+## Process notes (lessons across the iteration)
+
+- Verification rounds are non-negotiable. Rounds 7a-7c-2 averaged 2-4 verification cycles per round; trying to skip them ships regressions.
+- Owner spot-checks find bugs that automated tests can't (CSS rendering, parallel pipelines, classifier override propagation). Format: structured table with red-highlighted failures.
+- Three-agent team for architectural rounds; single-agent for small focused rounds. Match team size to scope.
+- Test-first for new modules. Tests committed in the same commit as the module, not after.
+- Source fixes beat downstream patches when both are feasible. Round 7c's `fundamental_metrics.py:486` rename cleaned up years of accumulated downstream-correction patches.
+- Manual CSV regeneration after pipeline changes is an owner step, not an agent step. Documented in each round's verification checklist.
+
+---
+
+Last refreshed 2026-04-27 after Round 7c-2 merge. Round 7d is the final round in this iteration. After 7d ships, the iteration closes and a new plan should be drafted (likely focused on the polish/a11y consolidation round, then ML methodology review).
