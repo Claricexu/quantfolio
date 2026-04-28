@@ -964,6 +964,18 @@ function buildVerdictCard(v) {
   const tests = v.tests || {};
   const flags = v.dealbreakers || {};
 
+  // Round 7d / Commit 5: data freshness chip beside the SCORE box. Sourced
+  // from v.as_of_csv_mtime (added in Phase 2 commit 250aa07) — the mtime of
+  // screener_results.csv at the time the verdict was loaded. Reuses the same
+  // .as-of-chip style as the Daily Report Firm Score and Leader Detector
+  // VERDICT column header chips for visual consistency. Hidden when the
+  // backend doesn't surface the field (older cached responses, or
+  // INSUFFICIENT_DATA branch which returns earlier above).
+  const asOfLabel = fmtAsOf(v.as_of_csv_mtime);
+  const asOfChipHTML = asOfLabel
+    ? `<span class="as-of-chip" title="${escapeHTML(asOfLabel)}" style="margin-left:0;margin-bottom:6px;display:inline-block">${escapeHTML(asOfLabel)}</span>`
+    : '';
+
   const archetypeKey = (v.archetype || '').toUpperCase();
   const testDefs = TEST_DEFS_BY_ARCHETYPE[archetypeKey] || TEST_DEFS_BY_ARCHETYPE.GROWTH;
   const testRow = testDefs.map(([l, key]) => `
@@ -1053,9 +1065,12 @@ function buildVerdictCard(v) {
         <div style="font-size:22px;font-weight:700;color:${color};letter-spacing:0.5px">${verdictLabel(verdict)}${archetypeChip(v.archetype)}</div>
         <div style="font-size:11px;color:var(--text-muted);margin-top:3px">Good Firm Score: <strong style="color:${color}">${score}/100</strong> \u00B7 Tests passed: <strong>${v.tests_passed || 0}/5</strong></div>
       </div>
-      <div style="background:${bg};border:1px solid ${border};border-radius:8px;padding:8px 14px;text-align:right;min-width:90px">
-        <div style="font-size:10px;color:var(--text-dim);letter-spacing:0.5px">SCORE</div>
-        <div style="font-size:28px;font-weight:700;color:${color};line-height:1">${score}</div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:0">
+        ${asOfChipHTML}
+        <div style="background:${bg};border:1px solid ${border};border-radius:8px;padding:8px 14px;text-align:right;min-width:90px">
+          <div style="font-size:10px;color:var(--text-dim);letter-spacing:0.5px">SCORE</div>
+          <div style="font-size:28px;font-weight:700;color:${color};line-height:1">${score}</div>
+        </div>
       </div>
     </div>
     <div style="background:var(--bg-cell);border-radius:6px;overflow:hidden;height:6px;margin-bottom:12px">
@@ -1175,6 +1190,15 @@ function buildCompareCard(d) {
     return Math.round(v) + 'x';
   }
 
+  // Round 7d / Commit 5: ETF P/E is a weighted average of holdings, not a
+  // company earnings ratio. Surface that distinction via a tooltip when the
+  // ticker is in the ETF set. ETF detection via ETF_TICKERS membership
+  // (not classifier "Unknown") \u2014 they diverge on BRK.B etc. The set is
+  // populated lazily by the /api/symbols init fetch; if it hasn't resolved
+  // yet, peIsETF is false and the tooltip is omitted (the P/E number still
+  // renders correctly \u2014 only the explanatory tooltip is missed on race).
+  const peIsETF = !!(window._etfTickersSet && d && d.symbol && window._etfTickersSet.has(d.symbol));
+
   let svrBlock = '';
   if (d.svr != null) {
     svrBlock = `
@@ -1189,7 +1213,7 @@ function buildCompareCard(d) {
         <div class="svr-box" style="background:var(--bg-cell)"><div class="label">Quarterly Revenue</div>
           <div class="value" style="font-size:15px;color:var(--text-secondary)">${fmtCap(d.quarterly_revenue)}</div></div>
         <div class="svr-box" style="background:var(--bg-cell)"><div class="label">P/E</div>
-          <div class="value" style="font-size:15px;color:var(--text-secondary)">${fmtPE(d.pe_trailing)}</div></div>
+          <div class="value" style="font-size:15px;color:var(--text-secondary)"${peIsETF ? ' title="Weighted average of holdings"' : ''}>${fmtPE(d.pe_trailing)}</div></div>
       </div>`;
   } else {
     svrBlock = `
@@ -1203,7 +1227,7 @@ function buildCompareCard(d) {
         <div class="svr-box" style="background:var(--bg-cell)"><div class="label">Quarterly Revenue</div>
           <div class="value" style="font-size:15px;color:var(--text-secondary)">${fmtCap(d.quarterly_revenue)}</div></div>
         <div class="svr-box" style="background:var(--bg-cell)"><div class="label">P/E</div>
-          <div class="value" style="font-size:15px;color:var(--text-secondary)">${fmtPE(d.pe_trailing)}</div></div>
+          <div class="value" style="font-size:15px;color:var(--text-secondary)"${peIsETF ? ' title="Weighted average of holdings"' : ''}>${fmtPE(d.pe_trailing)}</div></div>
       </div>`;
   }
 
@@ -3692,12 +3716,24 @@ document.getElementById('tickerInput').focus();
 
 // Refresh footer ticker count from the live universe. Cheap, fire-and-forget;
 // on failure the hardcoded fallback (last measured count) stays visible.
+//
+// Round 7d / Commit 5: piggy-back on this same call to populate
+// window._etfTickersSet for the verdict card peer column (em-dash for ETFs)
+// and the Compare card P/E tooltip ("Weighted average of holdings").
+// ETF detection via ETF_TICKERS membership (not classifier "Unknown") —
+// they diverge on BRK.B etc. The set may not resolve before the first
+// lookup; both call sites degrade gracefully (peer column shows numeric;
+// P/E shows no tooltip). User re-renders pick up the set on second click.
 fetchTimeout(`${API_BASE}/api/symbols`, 5000)
   .then(r => r && r.ok ? r.json() : null)
   .then(j => {
-    if (j && typeof j.count === 'number') {
+    if (!j) return;
+    if (typeof j.count === 'number') {
       const el = document.getElementById('footerTickerCount');
       if (el) el.textContent = j.count;
+    }
+    if (Array.isArray(j.etf_tickers)) {
+      window._etfTickersSet = new Set(j.etf_tickers);
     }
   })
   .catch(() => {});
