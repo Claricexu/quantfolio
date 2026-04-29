@@ -11,11 +11,23 @@
 
 - Replaced redundant Sector card on Ticker Lookup with a P/E (Price-to-Earnings) card. Sector and Industry information remain available on the Verdict Card below. P/E shows trailing P/E ratio with em-dash fallback for negative earnings or missing data.
 
+## 2026-04-26 — Round 7c
+
+- Canonical classifier module (classifier.py): SIC ranges + 9 ticker overrides → (sector, industry_group, industry); replaces the JS-side `broadSector` derivation.
+- Industry Group filter chips on Leader Detector with cross-narrowing against the Sector dropdown.
+- Source-rename arc replacing ad-hoc sector strings with classifier outputs across screener and frontend.
+
+## 2026-04-25 — Round 7b
+
+- FB-6: Strategy Lab defaults to the symbols in the most recent Daily Report; "Show all symbols" toggle bypasses (does not persist across reloads).
+- FB-7: Banner-level "Close prices as of …" aggregation on Daily Report; per-row "As of" column and Firm-Score-header chip removed in favor of the banner.
+
 ## 2026-04-25 — Round 7a
 
 - Verdict card now expands inline beneath the clicked ticker row on Daily Report and Leader Detector, instead of always showing at the top of the tab. Single card open at a time; close with × or by clicking another ticker.
 - Strategy Lab comparison chart expands inline beneath the clicked library row, with the same close-on-× behavior.
 - Ticker Lookup verdict cache now stays valid through weekends (Friday's report remains acceptable until Monday's scheduled run), and the cache loads from disk on first access after a server restart.
+- Leader Detector freeze fix: avoid the multi-second browser hang when expanding rows on the Universe table.
 
 ## 2026-04-24 — Round 5 + 6
 

@@ -52,7 +52,7 @@ Finance/
 │   └── prescreen_rules.json      # Prescreen thresholds (6 rules, tunable config)
 │
 ├── tests/
-│   ├── unit/                     # 24 plain-assert tests (see §8)
+│   ├── unit/                     # 57 plain-assert tests (see §8)
 │   └── backtest_baselines/       # Live-vs-live verify scripts for C-3 refactor
 │
 ├── diagnostics/                  # 18 one-off scripts (see §10)
@@ -170,7 +170,7 @@ Both run in the in-process `BackgroundScheduler`. If APScheduler isn't installed
 3. Cold-start fallback: when `_report_cache["data"]` is empty, calls `_load_latest_report_from_disk()` and re-snapshots before the freshness check, so a server restart doesn't force a fresh ~50 s recompute when a recent report exists on disk.
 4. Future-dated caches (NTP skew, manual clock change) return False — Wright-required clock-skew guard.
 
-**Latent timezone bug — file before any non-EST deployment.** Timestamps in `_run_dual_report` and `_load_latest_report_from_disk` are currently naive; the freshness helper assumes naive = `America/New_York`. Correct on the user's Windows EST machine; non-EST deployment requires a 4-line fix in those two write sites (`datetime.now(tz=ZoneInfo("America/New_York"))`).
+**Latent timezone bug — file before any non-EST deployment.** Timestamps in `_run_dual_report`, `_load_latest_report_from_disk`, and `verdict_provider.load_verdict_for_symbol`'s `as_of_csv_mtime` field (Round 7d) are currently naive; the freshness helper and the verdict-card timestamp chip assume naive = `America/New_York`. Correct on the user's Windows EST machine; non-EST deployment requires the same `datetime.now(tz=ZoneInfo("America/New_York"))` fix in three write sites.
 
 ---
 
@@ -201,6 +201,10 @@ Plain-assert style (no pytest dependency); each test file exposes a `run_all()` 
 | `test_backtest_engine_edge_cases.py` | 10 | Gapped index rejection, empty frames, min-days guard, strategy callback contract |
 | `test_backtest_engine_basic.py` | 4 | Golden-path walk-forward; includes `test_run_equals_run_multi_single_key` regression guard (Phase 5) |
 | `test_api_backtest_wire_format.py` | 4 | `/api/backtest-chart/{symbol}` response shape — guards against engine-only fields leaking into the public contract |
+| `test_http_client.py`, `test_edgar_fetcher_http.py`, `test_yfinance_http.py` | 7 + 4 + 4 | HTTP retry / 429 backoff / EDGAR rate-limit / yfinance failure handling (Round 4 C-4) |
+| `test_predict_ticker_warnings.py` | 2 | `stale_features_used` warning surfaces correctly when today's features have NaN (Round 5) |
+| `test_classifier.py` | 10 | Sector / industry_group / industry derivation: SIC ranges, ticker overrides, sic_description fallback, Unknown handling (Round 7c) |
+| `test_peer_median.py` | 6 | Per-bucket median aggregation, min_peers threshold, Nones excluded, missing industry_group, no cross-bucket leakage, CSV round-trip (Round 7d) |
 
 **Run all:** `python tests/unit/run_all.py` — completes in a few seconds; no network, no disk-heavy fixtures.
 
