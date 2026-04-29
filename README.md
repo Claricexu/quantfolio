@@ -1,6 +1,6 @@
 # Quantfolio
 
-A patient investor's ML toolkit that combines quantitative signals with value principles. One-click dashboard, two ensemble models, walk-forward backtesting, zero dependencies on Wall Street.
+A local-first ML toolkit for patient investors. Combines SEC fundamentals, peer-median benchmarking, and two walk-forward ensemble models — no cloud, no auth, runs on your laptop.
 
 ## Architecture
 
@@ -22,8 +22,11 @@ index.html             <-->  api_server.py       -->    Lite model (RF + XGBoost
                              universe_builder.py   -->   universe_raw.csv (2,501)
                                                    -->   universe_prescreened.csv (1,414)
                              edgar_fetcher.py      -->   fundamentals.db (SEC XBRL, WAL)
+                             classifier.py         -->   (sector, industry_group, industry)
+                                                         via SIC ranges + 9 ticker overrides
                              fundamental_screener  -->   screener_results.csv (1,414 rows,
-                                                              verdict + archetype + score)
+                                                              verdict + archetype + score
+                                                              + peer_median_* x 8 + peer_count)
                              verdict_provider.py   -->   unified verdict loader for all tabs
                              leader_selector.py    -->   leaders.csv (100 LEADER ∪ top GEM)
 ```
@@ -32,10 +35,10 @@ index.html             <-->  api_server.py       -->    Lite model (RF + XGBoost
 
 ## Features
 
-- **Ticker Lookup** — Enter any ticker and get a Lite-vs-Pro side-by-side prediction with consensus signal, SVR valuation, and best backtest strategy.
-- **Daily Report** — Auto-scans 174 symbols (100 automated leaders ∪ 85 manual watchlist, deduped) at market close, generates a sortable report with best strategy per ticker
-- **Strategy Lab** — Batch walk-forward backtesting across all tickers, equity curve charting, and strategy comparison library
-- **Leader Detector** — Browse the 1,414-row prescreened SEC universe with 4-verdict tags (LEADER / GEM / WATCH / AVOID), binary archetype (GROWTH vs MATURE), sector rank, and Good Firm score. Filter by verdict, archetype, or sector; trigger quarterly rebuild; download CSV.
+- **Ticker Lookup** — Enter any ticker and get a Lite-vs-Pro prediction with consensus signal. Four-card valuation row (SVR / Market Cap / Quarterly Revenue / P/E) plus a verdict card with three-column metric grid showing the company value alongside its industry-group peer median.
+- **Daily Report** — Auto-scans 174 symbols at market close. Sortable table; click any row to expand the verdict card inline. Banner aggregates per-date close prices across symbols.
+- **Strategy Lab** — Batch walk-forward backtesting across all tickers. Defaults to Daily Report symbols with an override toggle. Click any row to expand the equity-curve chart inline.
+- **Leader Detector** — Browse the 1,414-row prescreened SEC universe with 4-verdict tags (LEADER / GEM / WATCH / AVOID), binary archetype (GROWTH vs MATURE), sector rank, and Good Firm score. Filter by verdict, archetype, sector, or industry group. Click any row to expand the verdict card inline.
 - **Auto Strategy Mode** — ETFs use Full Signal (BUY+SELL), individual stocks use Buy-Only (BUY only, hold)
 - **SVR (Simple Value Ratio)** — Quick valuation check (Market Cap / Annualized Revenue), displayed in predictions and reports
 - **Best Strategy** — Each ticker's optimal risk-adjusted strategy (by Sharpe ratio) surfaced in lookup, report, and lab
@@ -43,19 +46,20 @@ index.html             <-->  api_server.py       -->    Lite model (RF + XGBoost
 ## Dashboard Tabs
 
 ### Ticker Lookup
-Enter a symbol and click **Predict**. Shows a Lite-vs-Pro side-by-side prediction with predicted price, percent change, signal (BUY/SELL/HOLD), consensus + confidence, SVR valuation, per-model sub-predictions, and best backtest strategy with Sharpe ratio.
+Enter a symbol and click **Predict**. Shows a Lite-vs-Pro side-by-side prediction with predicted price, percent change, signal (BUY/SELL/HOLD), consensus + confidence, per-model sub-predictions, and best backtest strategy. A four-card valuation row (SVR / Market Cap / Quarterly Revenue / P/E) sits above a three-column verdict card that pairs each metric with its industry-group peer median. The verdict card carries an "as of" timestamp chip showing screener freshness; hover the chip to see the raw ISO timestamp.
 
 ### Daily Report
-Auto-generated at 4:05 PM EST on trading days. Sortable table with columns: Symbol, Price, Change, Lite Signal, Pro Signal, Consensus, Confidence, Best Strategy. Click any column header to sort. Click any row to expand the verdict card inline beneath that row. Color-coded signals and confidence levels.
+Auto-generated at 4:05 PM EST on trading days. Three sortable tables (HIGH-CONFIDENCE BUY, HIGH-CONFIDENCE SELL, ALL SYMBOLS) with columns Symbol / Price / Lite Chg / Lite Sig / Pro Chg / Pro Sig / Consensus / Conf / Best Strategy / Firm Score. Banner above aggregates close-price dates across symbols. Click any row to expand the verdict card inline beneath that row.
 
 ### Strategy Lab
 - **Run Batch Backtest** — Backtests all tickers with 5 strategies (Buy & Hold, Lite Buy-Only, Lite Full, Pro Buy-Only, Pro Full). Skips tickers with fresh cached results (< 7 days).
+- **Default filter** — Defaults to the symbols in the most recent Daily Report. Toggle "Show all symbols" to bypass the filter; toggle does not persist across reloads.
 - **Library Table** — Sortable results showing best strategy, Sharpe ratio, total return, max drawdown, and Sharpe vs B&H delta for every ticker.
 - **Equity Curve Viewer** — Click any ticker row in the library to expand its interactive Chart.js equity curve inline beneath the clicked row, with all 5 strategy lines color-coded.
 
 ### Leader Detector
 - **Universe Viewer** — Sortable table of all 1,414 prescreened symbols. Columns: Symbol, Name, Sector, Market Cap, Verdict, Good Firm Score, Archetype, Sector Rank, Selected (✓ if in `leaders.csv`). Click any row to expand the verdict card inline beneath that row.
-- **Filter Chips** — VERDICT (All / Leader / Gem / Watch / Avoid), ARCHETYPE (All / Growth / Mature), and a SECTOR dropdown populated from the live dataset.
+- **Filter Chips** — VERDICT (All / Leader / Gem / Watch / Avoid), ARCHETYPE (All / Growth / Mature), a SECTOR dropdown, and an INDUSTRY GROUP chip row that AND-combines with sector. All four filter families cross-narrow: picking Industry Group=Semiconductors trims the Sector dropdown; picking Sector=Technology trims the Industry Group chip pool.
 - **Rebuild Now** — Kicks off the Layer 1 pipeline (`universe_builder.py` → `edgar_fetcher.py` → `fundamental_screener.py` → `leader_selector.py`). Warm rebuild ≈ 10 min; cold rebuild ≈ 3.5 hr (SEC EDGAR rate-limits at 10 req/sec).
 - **Download CSV** — Export the currently filtered view for offline analysis.
 - **Verdict Semantics** — `LEADER` = 5/5 archetype tests + top-5 market-cap rank in sector + no dealbreaker. `GEM` = 5/5 + outside top-5 rank. `WATCH` = 3–4/5. `AVOID` = ≤2/5 or any dealbreaker.
@@ -250,14 +254,15 @@ Finance/
 ├── universe_builder.py          # Phase 1.0 + 1.1: pulls SEC tickers, applies prescreen
 ├── edgar_fetcher.py             # Phase 1.2: pulls XBRL facts into fundamentals.db (WAL)
 ├── fundamental_metrics.py       # Phase 1.3a: metric computations + archetype classifier
-├── fundamental_screener.py      # Phase 1.3b: archetype-routed tests, verdict assignment
+├── classifier.py                # Round 7c: SIC + ticker overrides → (sector, industry_group, industry)
+├── fundamental_screener.py      # Phase 1.3b: archetype-routed tests, verdict, peer medians
 ├── verdict_provider.py          # Unified verdict loader (single source of truth across tabs)
 ├── leader_selector.py           # Phase 1.4: LEADER ∪ top-GEM -> leaders.csv
 ├── prescreen_rules.json         # 6-rule prescreen config (liquidity, filings, SIC, SVR)
 ├── good_firm_framework.md       # Framework spec (archetypes, tests, verdicts)
 │
 ├── tests/
-│   ├── unit/                    # 24 plain-assert unit tests for BacktestEngine
+│   ├── unit/                    # 57 plain-assert unit tests (BacktestEngine, classifier, peer median, HTTP)
 │   └── backtest_baselines/      # Live-vs-live verify scripts (C-3 regression barrier)
 │
 ├── frontend/
