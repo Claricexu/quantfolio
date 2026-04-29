@@ -145,6 +145,20 @@ These rates are estimated from the metric-availability statistics observed in `d
 
 ---
 
+## Owner verification observations (2026-04-28)
+
+Verified all five spot-check scenarios plus Daily Report inline, Leader Detector inline, and Round 7a-7c-2 regression checks. Four observations worth recording for future readers.
+
+**SPY (ETF) and GS (Goldman Sachs) hit pre-existing fallback messages, not Round 7d's verdict card.** SPY shows "We don't have SEC filings for this symbol — likely an ETF, ADR, or non-US issuer. Fundamental verdict doesn't apply here." GS shows "This company files with the SEC, but reports revenue in a non-standard format our parser can't read yet. We're tracking it — no verdict for now." Both fallbacks predate Round 7d and behave correctly for tickers without parseable fundamentals — these tickers don't have the underlying data to support a fundamental verdict, so the verdict card itself is not rendered.
+
+**Sophia's "Peer median comparison not applicable for ETFs" inline note (commit a1ae043) may be unreachable code in production.** Since ETFs hit the pre-existing fallback path before reaching the verdict card render, the inline note added during sophia's review likely never displays. Worth investigating in a future round whether to remove the dead code or update the SEC fallback path to incorporate the peer-comparison context.
+
+**NVDA, GOOGL, RIVN all rendered correctly across all three surfaces** (Ticker Lookup, Daily Report inline, Leader Detector inline). Three-column grid layout, peer medians populated, em-dash for missing data, timestamp chip displayed. Round 7a-7c-2 features all still working.
+
+**Color hierarchy refinement (commit 6b4375e):** initial verification flagged that the peer median column read as visually dimmer than the company column, weakening the comparison story. Resolved before merge by brightening peer values from `var(--text-dim)` to `var(--text-secondary)` (matching company column brightness) while preserving subtle hierarchy via font-weight (peer 500 vs company 600). Em-dashes in the peer column wrapped in `var(--text-faint)` to stay visually quiet when surrounding numbers are bright — preserves the "absent data" signal at the new contrast level.
+
+---
+
 ## Owner verification steps (required before merge to `main`)
 
 1. **Regenerate `screener_results.csv`** — `python fundamental_screener.py --universe universe_prescreened.csv --csv-out screener_results.csv`. New columns appear: 8 `peer_median_*` + `peer_count`. Dropped: `svr_vs_sector_median`.
