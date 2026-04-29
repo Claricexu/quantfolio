@@ -149,14 +149,21 @@ If that ticker was already processed by the most recent Daily Report run, you'll
 - **Z-Score** — how unusual today's prediction is vs the last 126 days (±2.5σ triggers signals)
 - **Sub-models** — individual predictions from RF, XGB, and LGBM before blending
 
-**Valuation cards (4 cards at the bottom)**
+**Valuation cards (4 cards at the top)**
 - **SVR** (Simple Value Ratio) — Market Cap ÷ Annual Revenue. Shown with a color-coded hint:
   - Green = Undervalued (SVR < 3)
   - Yellow = Fair Value (3 ≤ SVR < 8)
   - Red = Expensive (SVR ≥ 8)
 - **Market Cap** — company size in $M/$B/$T
 - **Quarterly Revenue** — most recent quarter's revenue
-- **Sector / Industry** — for stocks, shows both. For ETFs, shows "ETF" instead.
+- **P/E** — trailing Price-to-Earnings ratio. Em-dash for loss-making companies and missing data. For ETFs, hover the value to see "Weighted average of holdings" — an ETF's P/E is a holdings aggregate, not a valuation signal in the usual sense.
+
+**Verdict card (below the valuation cards)**
+- Three-column grid: Metric / Company / Peer Median. The Peer Median column shows the median value across other companies in the same industry group, so you can see at a glance whether this company sits above or below its peers on Revenue Growth, Operating Margin, ROIC, etc.
+- Em-dash in the Peer Median column means the metric isn't comparable for this row (Sector, Industry Group, Industry are categorical) or the industry-group bucket has fewer than 5 companies reporting that metric.
+- Sector / Industry Group / Industry rows show the canonical classification (e.g., NVDA → Technology / Semiconductors / Semiconductors & Related Devices). Override tickers (GOOGL, META, AMZN, AAPL, TSLA, V, MA, NFLX, GOOG) use a hand-crafted Industry value rather than the SEC's filed description.
+- A small "as of" timestamp chip sits above the SCORE box. Hover to reveal the raw ISO timestamp — useful if you suspect stale data.
+- For ETFs, an inline note "Peer median comparison not applicable for ETFs." appears below the grid.
 
 **Backtest Comparison button**
 - Click it to load an interactive chart of all 5 backtest strategies on a $10,000 portfolio, walking forward from 2015.
@@ -215,7 +222,7 @@ The Daily Report auto-scans **all 174 symbols** (100 automated leaders plus your
 - Click any row in the Daily Report table to expand the verdict card beneath that row. Only one card is open at a time — clicking a second row collapses the first. Close the card with the × button at the top-right or by clicking the same row again.
 - Columns (10 total): Symbol, Price, Lite Chg, Lite Sig, Pro Chg, Pro Sig, Consensus, Conf, Best Strategy, Firm Score
 - Color-coded signals and confidence badges
-- The Firm Score column shows a small "as of" timestamp chip reflecting when `screener_results.csv` was last regenerated
+- A banner above the tables shows when each row's close price is from. If all symbols share a date the banner reads "Close prices as of YYYY-MM-DD"; if a few rows are stale (e.g., one ticker's data is a day behind), they're broken out as "N symbols' close price as of YYYY-MM-DD" clauses.
 
 ### Email alerts (optional)
 
@@ -261,6 +268,10 @@ A progress bar shows which ticker is currently running. The page polls the serve
 
 At the top of the Strategy Lab, a summary callout shows how many tickers favor each strategy as their best (highest Sharpe). Use this to see where the models genuinely add value and where Buy & Hold is hard to beat.
 
+### Default filter
+
+Strategy Lab opens filtered to the symbols in the most recent Daily Report. A "Show all symbols" toggle above the library bypasses the filter and shows every cached backtest. The toggle resets to off on each page reload — the default is always "today's Daily Report symbols". A small status line on the right reports the current state (e.g., "Filtered to 174 of 312 symbols (current Daily Report)").
+
 ### Library Table
 
 Every processed ticker appears with these columns (click any header to sort):
@@ -303,7 +314,7 @@ Quantfolio runs an automated fundamentals screen over the entire SEC-registered 
 | **SEL** | ✓ if this ticker is in `leaders.csv` (the 100 Quantfolio trades). A dash (–) means the screener analyzed it but did not pick it. |
 | **SYMBOL** | Ticker |
 | **NAME** | Company name |
-| **SECTOR** | Broad sector bucket (Technology, Health Care, Financials, …) derived from the filing SIC code |
+| **SECTOR** | Canonical sector bucket (10 buckets: Technology, Healthcare, Financials, Communication Services, Consumer Discretionary, Consumer Staples, Energy, Industrials, Materials, Utilities). Derived from SIC + ticker overrides for the 9 mega-caps whose SIC codes misrepresent their actual business (GOOGL/META/NFLX → Communication Services, AAPL → Technology, AMZN → Consumer Discretionary, etc.). |
 | **MKT CAP** | Size (shown as $M / $B / $T) |
 | **VERDICT** | LEADER / GEM / WATCH / AVOID (colored badge). Shows an "as of" timestamp chip reflecting when the screener last ran. |
 | **SCORE** | Good Firm score (0–100) |
@@ -317,6 +328,7 @@ Click any column header to sort (▲ / ▼). Click any row in the Leader Detecto
 - **VERDICT** — All / Leader / Gem / Watch / Avoid
 - **ARCHETYPE** — All / Growth / Mature
 - **SECTOR** — dropdown populated from the live data
+- **INDUSTRY GROUP** — chip row beneath the controls block. AND-combines with the SECTOR filter, so SECTOR=Technology + INDUSTRY GROUP=Semiconductors narrows to semiconductor companies in the Technology sector. Picking an industry group also trims the Sector dropdown to just the sectors containing rows in that group.
 
 **Rebuild Now** button — kicks off the quarterly pipeline that rebuilds `leaders.csv` from the latest SEC filings.
 
