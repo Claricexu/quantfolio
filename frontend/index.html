@@ -1030,11 +1030,17 @@ function buildVerdictCard(v) {
   // back to numeric peer rendering rather than mis-blanking. Categorical rows
   // (peerKey null) always render em-dash for visual rhythm.
   const isETF = !!(window._etfTickersSet && v.symbol && window._etfTickersSet.has(v.symbol));
+  // Round 7d fix: peer cell wrapper uses --text-secondary (matches company
+  // brightness for stronger comparison story). At that brightness an em-dash
+  // would visually shout, so the three "no-comparison-applicable" cases
+  // (categorical row, ETF, missing peer median) return a styled span that
+  // overrides back to --text-faint. Goal: quiet, not invisible.
+  const dashFaint = '<span style="color:var(--text-faint)">\u2014</span>';
   function fmtPeerVal(peerKey, label) {
-    if (peerKey == null) return '\u2014';
-    if (isETF) return '\u2014';
+    if (peerKey == null) return dashFaint;
+    if (isETF) return dashFaint;
     const raw = v['peer_median_' + peerKey];
-    if (raw == null) return '\u2014';
+    if (raw == null) return dashFaint;
     // Match the company-value formatter for the same row.
     if (peerKey === 'svr') return raw.toFixed(1) + 'x';
     if (peerKey === 'rule_40_score') return raw.toFixed(1);
@@ -1054,7 +1060,7 @@ function buildVerdictCard(v) {
     <div style="display:grid;grid-template-columns:1.4fr 1fr 1fr;column-gap:10px;align-items:center;padding:5px 10px;border-bottom:1px solid var(--border)">
       <span style="font-size:11px;color:var(--text-dim);letter-spacing:0.3px">${l}</span>
       <span style="font-size:12px;color:var(--text-secondary);font-family:var(--mono);font-weight:600;text-align:right">${val}</span>
-      <span style="font-size:12px;color:var(--text-dim);font-family:var(--mono);font-weight:500;text-align:right">${fmtPeerVal(peerKey, l)}</span>
+      <span style="font-size:12px;color:var(--text-secondary);font-family:var(--mono);font-weight:500;text-align:right">${fmtPeerVal(peerKey, l)}</span>
     </div>`).join('');
 
   return `
