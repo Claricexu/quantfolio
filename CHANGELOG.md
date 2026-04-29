@@ -1,4 +1,12 @@
 
+## 2026-04-28 — Round 7d
+
+- Verdict card now shows a peer-median column alongside each company value — for the 8 metrics where it makes sense (Revenue YoY, Revenue 3Y CAGR, Gross Margin, Operating Margin, FCF Margin, Rule of 40, ROIC, SVR). Peers are bucketed by industry group; em-dash renders when fewer than 5 industry-group peers report the metric. Categorical rows (Sector, Industry Group, Industry, Sector Rank) render em-dash in the peer column to keep visual rhythm.
+- Verdict card now carries a small "as of" timestamp chip beside the SCORE box, showing when the underlying screener data was last refreshed. Hover reveals the raw timestamp for debugging stale-cache complaints. Style matches the existing Daily Report and Leader Detector freshness chips.
+- Compare card P/E value now shows a "Weighted average of holdings" tooltip on hover when the ticker is an ETF — clarifies that an ETF's P/E is a holdings-weighted aggregate, not a valuation signal in the usual sense.
+- ETF verdict cards now show an inline note "Peer median comparison not applicable for ETFs." below the metric grid, instead of an unexplained column of em-dashes.
+- Behind the scenes: dropped the old `svr_vs_sector_median` field and its `+5` Good Firm Score bonus — peer-median SVR (industry-group bucket) supersedes the SIC-2 ratio. Maximum ±5 score drift per ticker; rebuild `leaders.csv` to see the new ranking. New `peer_count` column carried in the CSV for forward-compat ("n=12" tooltip in a future round).
+
 ## 2026-04-27 — Round 7c-2
 
 - Replaced redundant Sector card on Ticker Lookup with a P/E (Price-to-Earnings) card. Sector and Industry information remain available on the Verdict Card below. P/E shows trailing P/E ratio with em-dash fallback for negative earnings or missing data.
