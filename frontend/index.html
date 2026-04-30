@@ -1046,7 +1046,6 @@ function buildVerdictCard(v) {
     const raw = v['peer_median_' + peerKey];
     if (raw == null) return dashFaint;
     // Match the company-value formatter for the same row.
-    if (peerKey === 'svr') return raw.toFixed(1) + 'x';
     if (peerKey === 'rule_40_score') return raw.toFixed(1);
     // Everything else in the peer set is a percentage-typed metric
     // (revenue_yoy_growth, revenue_3y_cagr, gross_margin_ttm,
@@ -1212,9 +1211,7 @@ function buildCompareCard(d) {
 
   // Round 8a Phase 3: peer-median SVR annotation on the live SVR card.
   // Sourced from d.peer_median_svr (injected by api_server._inject_classifier_fields
-  // from screener_results.csv via verdict_provider). Rendered as a small
-  // subtitle below the existing svr-hint label so the live yfinance value
-  // stays primary. Owner-locked decisions:
+  // from screener_results.csv via verdict_provider). Owner-locked decisions:
   //  - Render whenever peer_median_svr is non-null, even if live SVR is
   //    null (the em-dash branch below) \u2014 the peer comparison still informs.
   //  - Omit entirely for ETFs (peer-median bucket is industry_group, which
@@ -1222,8 +1219,12 @@ function buildCompareCard(d) {
   //    card's peIsETF pattern).
   // This consolidates SVR into a single card; the verdict-card SVR row
   // was deleted in the same commit so the two values can no longer diverge.
+  // Round 8a Phase 4: peer line promoted from footnote to primary line.
+  // - Color matches verdict card peer cells (--text-secondary, see line ~1067).
+  // - margin-top:3px aligns with the .svr-hint rule (line 115) for rhythm
+  //   consistency now that this is a primary line, not a footnote.
   const peerSvrLine = (!peIsETF && d.peer_median_svr != null)
-    ? `<div style="font-size:10px;color:var(--text-faint);margin-top:2px">peer ${d.peer_median_svr.toFixed(1)}x</div>`
+    ? `<div style="font-size:10px;color:var(--text-secondary);margin-top:3px">peer median ${d.peer_median_svr.toFixed(1)}x</div>`
     : '';
 
   let svrBlock = '';
@@ -1232,8 +1233,7 @@ function buildCompareCard(d) {
       <div class="svr-grid" style="grid-template-columns:1fr 1fr 1fr 1fr">
         <div class="svr-box" style="background:#0e1e2e;border:1px solid ${d.svr<3?'var(--green-border)':d.svr<8?'var(--yellow-border)':'var(--red-border)'}">
           <div class="label">SVR</div>
-          <div class="value" style="font-size:20px;color:${svrColor(d.svr)}">${d.svr.toFixed(1)}x</div>
-          <div class="svr-hint" style="color:${svrColor(d.svr)};opacity:0.85">${svrLabel(d.svr)}</div>
+          <div class="value" style="font-size:18px;color:${svrColor(d.svr)};white-space:nowrap">${d.svr.toFixed(1)}x ${svrLabel(d.svr)}</div>
           ${peerSvrLine}
         </div>
         <div class="svr-box" style="background:var(--bg-cell)"><div class="label">Market Cap</div>
@@ -1248,7 +1248,7 @@ function buildCompareCard(d) {
       <div class="svr-grid" style="grid-template-columns:1fr 1fr 1fr 1fr">
         <div class="svr-box" style="background:#0e1e2e;border:1px solid var(--bg-cell)">
           <div class="label">SVR</div>
-          <div class="value" style="font-size:20px;color:var(--text-secondary)">\u2014</div>
+          <div class="value" style="font-size:18px;color:var(--text-secondary)">\u2014</div>
           ${peerSvrLine}
         </div>
         <div class="svr-box" style="background:var(--bg-cell)"><div class="label">Market Cap</div>
