@@ -701,7 +701,7 @@ function fmtCachedAt(iso) {
   if (!iso) return '';
   try {
     const d = new Date(iso);
-    return d.toLocaleString(undefined, { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+    return d.toLocaleString(undefined, { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }) + ' ET';
   } catch { return iso; }
 }
 function fmtCap(v) {
@@ -1333,7 +1333,7 @@ function fmtAsOf(iso) {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
   const pad = n => String(n).padStart(2, '0');
-  return `As of ${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `As of ${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())} ET`;
 }
 
 async function loadScreenerMap() {
@@ -1656,7 +1656,7 @@ function renderReportStatusBanner(statusEl, generatedAt, summary, data) {
     if (!Number.isNaN(parsed.getTime())) dt = parsed;
   }
   if (dt) {
-    const timeStr = dt.toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+    const timeStr = dt.toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }) + ' ET';
     const symbolCount = summary.total_symbols || data.length;
     const asOfClause = _buildAsOfBreakdown(data);
     const tail = asOfClause ? ` | ${asOfClause}` : '';
