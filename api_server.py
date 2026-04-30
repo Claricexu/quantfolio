@@ -530,8 +530,6 @@ def _is_cached_report_acceptable(report_timestamp: datetime, now: datetime | Non
     """
     if now is None:
         now = datetime.now(tz=ZoneInfo("America/New_York"))
-    if report_timestamp.tzinfo is None:
-        report_timestamp = report_timestamp.replace(tzinfo=ZoneInfo("America/New_York"))
 
     age = now - report_timestamp
     # Clock-skew guard: a future-dated cache (NTP skew, manual clock change)
@@ -663,7 +661,7 @@ def _run_dual_report():
         if report:
             with _report_lock:
                 _report_cache["data"] = report
-                _report_cache["generated_at"] = datetime.now().isoformat()
+                _report_cache["generated_at"] = datetime.now(ZoneInfo("America/New_York")).isoformat()
             print(f"[{datetime.now():%Y-%m-%d %H:%M}] Dual report complete — {report['summary']['total_symbols']} symbols.\n")
             # Send email alert if any high-confidence signals found
             _send_signal_alerts(report)
@@ -738,9 +736,21 @@ def _load_latest_report_from_disk():
             # which was 'dual_report_YYYYMMDD_HHMM.json' and broke Date parsing
             # on the frontend → "Invalid Date").
             gen_at = data.get('summary', {}).get('generated_at')
+            # Back-compat: pre-Round 8a reports stored naive ISO timestamps.
+            # Localize any naive value to America/New_York so the freshness
+            # check works on non-EST machines.
+            if gen_at:
+                try:
+                    parsed = datetime.fromisoformat(gen_at)
+                    if parsed.tzinfo is None:
+                        gen_at = parsed.replace(tzinfo=ZoneInfo("America/New_York")).isoformat()
+                except (ValueError, TypeError):
+                    pass
             if not gen_at:
                 try:
-                    gen_at = datetime.fromtimestamp(os.path.getmtime(latest)).isoformat()
+                    gen_at = datetime.fromtimestamp(
+                        os.path.getmtime(latest), tz=ZoneInfo("America/New_York")
+                    ).isoformat()
                 except Exception:
                     gen_at = None
             with _report_lock:

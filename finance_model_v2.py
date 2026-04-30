@@ -30,6 +30,7 @@ import os
 import time
 import random
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from ta.trend import SMAIndicator, EMAIndicator, ADXIndicator, MACD
 from ta.momentum import RSIIndicator, ROCIndicator
@@ -699,7 +700,7 @@ def daily_scan_both(symbols=None, cache_dir=None, top_n=10):
     conflict_count = sum(1 for r in results if r['confidence'] == 'CONFLICT')
 
     summary = {
-        'generated_at': datetime.now().isoformat(),
+        'generated_at': datetime.now(ZoneInfo("America/New_York")).isoformat(),
         'total_symbols': len(results),
         'consensus_buy': buy_count,
         'consensus_sell': sell_count,

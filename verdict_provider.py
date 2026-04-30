@@ -57,6 +57,7 @@ import os
 import threading
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 # Canonical location — matches api_server._SCREENER_RESULTS_PATH. Kept as
 # a module-level default rather than import-time resolution so tests can
@@ -315,7 +316,7 @@ def get_csv_mtime_iso(path: str | None = None) -> str | None:
         mtime = os.path.getmtime(path)
     except OSError:
         return None
-    return datetime.fromtimestamp(mtime).isoformat()
+    return datetime.fromtimestamp(mtime, tz=ZoneInfo("America/New_York")).isoformat()
 
 
 def csv_has_required_columns(
