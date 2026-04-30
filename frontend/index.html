@@ -15,6 +15,19 @@
     --text-primary: #f1faee; --text-secondary: #d8ece4;
     --text-muted: #8ba8a8; --text-dim: #5a7e7e; --text-faint: #3d6060;
     --text-ghost: #2a4848;
+    /* Round 8a Phase 3 (Item 5) WCAG audit:
+       --text-faint (#3d6060 on #0e1e2e ≈ 3.4:1) FAILS WCAG AA (needs 4.5:1)
+       for normal-size text but PASSES AA-Large at ~3:1. After this round it
+       is reserved for: (a) the variable definition itself, (b) input
+       placeholders (WCAG 1.4.3 explicitly excludes inactive UI states),
+       (c) the detail-card inline-close × button at 18px (icon-style
+       decorative chrome with hover :hover→--text-primary and :focus-visible
+       outline already in place), (d) .app-banner .ab-close at 16px (same
+       pattern), (e) the dashFaint em-dash absence-indicator span (decorative
+       "no value" placeholder, deliberately quiet so present values dominate).
+       All other 10-13px content-bearing usages were bumped to --text-muted
+       (#8ba8a8 ≈ 6.6:1, clears AA). Future edits introducing --text-faint
+       on real content text should re-run this audit. */
     --green-bg: #0d3325; --green-text: #34d399; --green-border: #166534;
     --red-bg: #3b1118; --red-text: #fb7185; --red-border: #881337;
     --yellow-bg: #2a2510; --yellow-text: #fbbf24; --yellow-border: #854d0e;
@@ -98,7 +111,10 @@
   h1 { font-size:36px; font-weight:800; letter-spacing:-1.5px; font-family:var(--mono);
     background: linear-gradient(135deg, var(--text-primary) 0%, #a8dadc 40%, #2d8b8b 100%);
     -webkit-background-clip:text; -webkit-text-fill-color:transparent; line-height:1.1; }
-  .date { font-size:13px; color:var(--text-faint); margin-top:6px; }
+  /* Round 8a Phase 3 (Item 5): bumped --text-faint -> --text-muted. The site
+     header date sits at 13px on dark bg; --text-faint (#3d6060) failed WCAG
+     AA at ~3.4:1, --text-muted (#8ba8a8) clears at ~6.6:1. */
+  .date { font-size:13px; color:var(--text-muted); margin-top:6px; }
 
   /* Tabs */
   .tabs { display:flex; gap:2px; background:var(--bg-card); border-radius:8px; padding:3px;
@@ -186,7 +202,10 @@
   .tbl-wrap { border-radius:10px; overflow:hidden; border:1px solid var(--border); margin-bottom:24px; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   thead tr { background:var(--bg-card); }
-  th { padding:10px 14px; text-align:left; color:var(--text-faint); font-weight:600; font-size:10px;
+  /* Round 8a Phase 3 (Item 5): bumped --text-faint -> --text-muted. Table
+     column labels are content (semantic header), not decoration. 10px on dark
+     bg → must clear AA. */
+  th { padding:10px 14px; text-align:left; color:var(--text-muted); font-weight:600; font-size:10px;
     letter-spacing:1px; text-transform:uppercase; border-bottom:1px solid var(--border); }
   th.sortable { cursor:pointer; user-select:none; transition:color 0.15s; white-space:nowrap; }
   th.sortable:hover { color:var(--blue-light); }
@@ -194,7 +213,10 @@
   /* Bucket 2 (2026-04-21): "As of YYYY-MM-DD HH:MM" freshness chip rendered
      next to the Firm Score / Verdict column headers. Deliberately muted
      so it reads as metadata, not as a sortable control. */
-  .as-of-chip { font-size:9px; font-weight:500; color:var(--text-faint);
+  /* Round 8a Phase 3 (Item 5): bumped --text-faint -> --text-muted. 9px
+     metadata chip (data-freshness timestamp) — content, not decoration,
+     and at 9px it's well below large-text thresholds so AA applies. */
+  .as-of-chip { font-size:9px; font-weight:500; color:var(--text-muted);
     letter-spacing:0.3px; text-transform:none; margin-left:6px;
     padding:1px 6px; border:1px solid var(--border); border-radius:8px;
     background:var(--bg-cell); white-space:nowrap; }
@@ -351,7 +373,9 @@
   /* Footer */
   .footer { margin-top:48px; padding-top:20px; border-top:1px solid var(--bg-card);
     font-size:11px; color:var(--text-ghost); text-align:center; line-height:1.6; }
-  .footer strong { color:var(--text-faint); }
+  /* Round 8a Phase 3 (Item 5): bumped --text-faint -> --text-muted. Footer
+     brand text "Quantfolio" — content; 11px on dark bg needs AA. */
+  .footer strong { color:var(--text-muted); }
 
   /* Backtest chart */
   .bt-chart-wrap { position: relative; height: 360px; margin-top: 16px; }
@@ -382,7 +406,10 @@
   .skeleton-empty .se-body  { color:var(--text-muted); margin-bottom:12px; }
   .skeleton-empty .se-time  { font-family:var(--mono); color:var(--blue-light); font-weight:600; }
   .skeleton-empty details   { margin-top:10px; border-top:1px dashed var(--border); padding-top:10px; }
-  .skeleton-empty details summary { cursor:pointer; font-size:11px; color:var(--text-faint);
+  /* Round 8a Phase 3 (Item 5): bumped --text-faint -> --text-muted. <details>
+     summary is the click target for expanding CLI command help; 11px content
+     needs AA. The :hover rule a few lines below already lifts to --blue-light. */
+  .skeleton-empty details summary { cursor:pointer; font-size:11px; color:var(--text-muted);
     letter-spacing:0.5px; text-transform:uppercase; font-weight:600; user-select:none;
     padding:4px 0; }
   .skeleton-empty details summary:hover { color:var(--blue-light); }
@@ -516,7 +543,7 @@
     <div id="backtestSection"></div>
 
     <div style="margin-top:28px">
-      <div style="font-size:11px;color:var(--text-faint);letter-spacing:1px;margin-bottom:10px;text-transform:uppercase;font-weight:600">Quick Access</div>
+      <div style="font-size:11px;color:var(--text-muted);letter-spacing:1px;margin-bottom:10px;text-transform:uppercase;font-weight:600">Quick Access</div>
       <div class="chips" id="quickChips"></div>
     </div>
   </div>
@@ -528,7 +555,7 @@
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px">
       <div>
         <h2 style="font-size:20px;font-weight:700;color:var(--text-primary);margin-bottom:4px">Daily Report</h2>
-        <p style="font-size:12px;color:var(--text-faint)">Both Lite and Pro models run on every symbol. Consensus signals show where both models agree.</p>
+        <p style="font-size:12px;color:var(--text-muted)">Both Lite and Pro models run on every symbol. Consensus signals show where both models agree.</p>
       </div>
       <button class="btn-sm" onclick="refreshReport()" id="btnRefreshReport">Generate Report</button>
     </div>
@@ -549,7 +576,7 @@
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px">
       <div>
         <h2 style="font-size:20px;font-weight:700;color:var(--text-primary);margin-bottom:4px">Strategy Lab</h2>
-        <p style="font-size:12px;color:var(--text-faint)">Walk-forward backtest comparison across all tickers. 5 strategies &bull; $10,000 starting capital.</p>
+        <p style="font-size:12px;color:var(--text-muted)">Walk-forward backtest comparison across all tickers. 5 strategies &bull; $10,000 starting capital.</p>
       </div>
       <button class="btn-sm" onclick="runBatchBacktest()" id="btnBatch">Run All Backtests</button>
     </div>
@@ -571,7 +598,7 @@
       <input type="checkbox" id="libShowAll" onchange="onLibShowAllChange()"
              style="cursor:pointer;accent-color:var(--blue-light)">
       <label for="libShowAll" style="cursor:pointer">Show all symbols</label>
-      <span id="libFilterStatus" style="margin-left:auto;font-size:11px;color:var(--text-faint)"></span>
+      <span id="libFilterStatus" style="margin-left:auto;font-size:11px;color:var(--text-muted)"></span>
     </div>
     <div id="batchStatus"></div>
     <div id="libCallout"></div>
@@ -594,10 +621,10 @@
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;gap:16px;flex-wrap:wrap">
       <div>
         <h2 style="font-size:20px;font-weight:700;color:var(--text-primary);margin-bottom:4px">Leader Detector</h2>
-        <p style="font-size:12px;color:var(--text-faint)">Ranked universe from SEC ~10k (prescreened ~1.4k). Leaders selected by verdict, firm score, archetype, and sector.</p>
+        <p style="font-size:12px;color:var(--text-muted)">Ranked universe from SEC ~10k (prescreened ~1.4k). Leaders selected by verdict, firm score, archetype, and sector.</p>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <div id="leadersMeta" style="font-size:11px;color:var(--text-faint);letter-spacing:0.5px">&mdash;</div>
+        <div id="leadersMeta" style="font-size:11px;color:var(--text-muted);letter-spacing:0.5px">&mdash;</div>
         <button class="btn-sm" onclick="downloadLeadersCsv()" id="btnDownloadLeaders" title="Download leaders.csv">Download CSV</button>
         <button class="btn-sm" onclick="rebuildLeaders()" id="btnRebuildLeaders">Rebuild Now</button>
       </div>
@@ -634,7 +661,7 @@
             <option value="ALL">All sectors</option>
           </select>
         </div>
-        <div style="margin-left:auto;font-size:11px;color:var(--text-faint)">
+        <div style="margin-left:auto;font-size:11px;color:var(--text-muted)">
           <span id="leadersVisibleCount">&mdash;</span>
         </div>
       </div>
@@ -1163,7 +1190,7 @@ function buildVerdictCard(v) {
     <div style="background:var(--bg-cell);border-radius:8px;overflow:hidden">
       ${headerHTML}
       ${rowsHTML}
-      ${isETF ? `<div style="font-size:10px;color:var(--text-faint);padding:6px 10px;text-align:right">Peer median comparison not applicable for ETFs.</div>` : ''}
+      ${isETF ? `<div style="font-size:10px;color:var(--text-muted);padding:6px 10px;text-align:right">Peer median comparison not applicable for ETFs.</div>` : ''}
     </div>
   </div>`;
 }
@@ -1332,7 +1359,7 @@ function buildCompareCard(d) {
   }
 
   function modelCol(m, label, dotColor) {
-    if (!m) return `<div class="compare-col"><div class="col-title"><div class="col-dot" style="background:${dotColor}"></div>${label}</div><div style="color:var(--text-faint);font-size:12px">Not available</div></div>`;
+    if (!m) return `<div class="compare-col"><div class="col-title"><div class="col-dot" style="background:${dotColor}"></div>${label}</div><div style="color:var(--text-muted);font-size:12px">Not available</div></div>`;
     const preds = m.model_predictions || {};
     const predsHTML = Object.entries(preds).map(([n,v]) =>
       `<div class="compare-metric"><span class="cm-label">${n}</span><span class="cm-value">${fmt$(v)}</span></div>`
@@ -1363,7 +1390,7 @@ function buildCompareCard(d) {
           ${d.cached_from_report ? `<span title="Served instantly from today's Daily Report cache (generated ${fmtCachedAt(d.cached_at)})" style="display:inline-flex;align-items:center;gap:5px;font-size:10px;color:var(--green-text);background:var(--green-bg);border:1px solid var(--green-border);padding:2px 8px;border-radius:10px;letter-spacing:0.5px;font-weight:600">
             <span style="width:5px;height:5px;border-radius:50%;background:var(--green-text);box-shadow:0 0 6px var(--green-text)"></span>CACHED
           </span>` : ''}
-          <span style="font-size:11px;color:var(--text-faint)">Through ${d.last_date}</span>
+          <span style="font-size:11px;color:var(--text-muted)">Through ${d.last_date}</span>
         </div>
       </div>
 
@@ -1373,7 +1400,7 @@ function buildCompareCard(d) {
         <div class="consensus-label">Consensus Signal</div>
         <div class="consensus-signal" style="color:${consColor}">${cs}</div>
         <div style="font-size:11px;color:${consColor};margin-top:4px;opacity:0.8">Confidence: <strong class="conf-${conf}">${conf}</strong></div>
-        ${bs ? `<div style="font-size:11px;color:var(--text-muted);margin-top:6px">Best Strategy: <strong style="color:var(--blue-light)">${bs.name}</strong> <span style="color:var(--text-faint)">(Sharpe ${bs.sharpe})</span></div>` : ''}
+        ${bs ? `<div style="font-size:11px;color:var(--text-muted);margin-top:6px">Best Strategy: <strong style="color:var(--blue-light)">${bs.name}</strong> <span style="color:var(--text-muted)">(Sharpe ${bs.sharpe})</span></div>` : ''}
       </div>
 
       <!-- Side by side -->
@@ -1440,7 +1467,7 @@ async function loadReport() {
   if (reportLoaded) return;
   const el = document.getElementById('reportContent');
   el.innerHTML = loaderHTML('Loading Lite + Pro report\u2026') +
-    `<div id="loadReportPollStatus" style="font-size:11px;color:var(--text-faint);margin-top:6px;text-align:center"></div>`;
+    `<div id="loadReportPollStatus" style="font-size:11px;color:var(--text-muted);margin-top:6px;text-align:center"></div>`;
   let lastOk = Date.now();
   const tick = setInterval(() => {
     const pse = document.getElementById('loadReportPollStatus');
@@ -1503,7 +1530,7 @@ function pollReport(statusEl) {
   let lastOk = Date.now();
   // Subtle "still working" indicator; appended once under the scan banner.
   if (statusEl && !document.getElementById('pollReportStatus')) {
-    statusEl.insertAdjacentHTML('beforeend', `<div id="pollReportStatus" style="font-size:11px;color:var(--text-faint);margin-top:6px"></div>`);
+    statusEl.insertAdjacentHTML('beforeend', `<div id="pollReportStatus" style="font-size:11px;color:var(--text-muted);margin-top:6px"></div>`);
   }
   const statusTick = setInterval(() => {
     const pse = document.getElementById('pollReportStatus');
@@ -2242,7 +2269,7 @@ function showBacktestButton(symbol) {
       <div style="display:flex;justify-content:space-between;align-items:center">
         <div>
           <div style="font-size:14px;font-weight:700;color:var(--text-primary)">Backtest Comparison</div>
-          <div style="font-size:11px;color:var(--text-faint);margin-top:2px">Walk-forward backtest &mdash; 5 strategies compared on $10,000 portfolio</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Walk-forward backtest &mdash; 5 strategies compared on $10,000 portfolio</div>
         </div>
         <button class="btn btn-primary" style="padding:10px 20px;font-size:12px" id="btnBacktest" onclick="runBacktest()">Run Backtest</button>
       </div>
@@ -2259,7 +2286,7 @@ async function runBacktest() {
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <div>
           <div style="font-size:14px;font-weight:700;color:var(--text-primary)">Backtest Comparison &mdash; ${_btSymbol}</div>
-          <div style="font-size:11px;color:var(--text-faint);margin-top:2px">Walk-forward &bull; $10,000 starting capital &bull; 5 strategies</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Walk-forward &bull; $10,000 starting capital &bull; 5 strategies</div>
         </div>
       </div>
       <div id="btProgress" class="loader"><div class="spinner"></div><span id="btProgressText">Starting walk-forward backtests&hellip; Lite and Pro run in parallel. Typically 4&ndash;8 min.</span></div>
@@ -2279,7 +2306,7 @@ async function pollBacktest() {
   // Append subtle "still working" indicator inside the progress loader.
   const prog = document.getElementById('btProgress');
   if (prog && !document.getElementById('btPollStatus')) {
-    prog.insertAdjacentHTML('beforeend', `<div id="btPollStatus" style="font-size:11px;color:var(--text-faint);margin-top:6px"></div>`);
+    prog.insertAdjacentHTML('beforeend', `<div id="btPollStatus" style="font-size:11px;color:var(--text-muted);margin-top:6px"></div>`);
   }
   _btStatusTick = setInterval(() => {
     const pse = document.getElementById('btPollStatus');
@@ -2446,7 +2473,7 @@ function renderStrategyStats(data, targetId) {
   if (ranked.length > 0) {
     const best = ranked[0];
     const bs = strats[best.key];
-    html += `<div style="font-size:11px;color:var(--text-faint);margin-top:8px">
+    html += `<div style="font-size:11px;color:var(--text-muted);margin-top:8px">
       Best risk-adjusted: <strong style="color:${best.color}">${best.label}</strong> (Sharpe ${bs.sharpe.toFixed(2)}, ${bs.return_pct >= 0 ? '+' : ''}${bs.return_pct}% return)
     </div>`;
   }
@@ -2775,7 +2802,7 @@ function buildLibraryRow(item) {
     <td class="mono" style="color:${shColor(bestSh || 0)};font-weight:700">${bestSh != null ? bestSh.toFixed(2) : '\u2014'}</td>
     <td class="mono" style="color:${shColor(bh.sharpe || 0)}">${bh.sharpe != null ? bh.sharpe.toFixed(2) : '\u2014'}</td>
     <td class="mono" style="color:var(--green-text);font-weight:600">${shDelta != null ? '+' + shDelta.toFixed(2) : '\u2014'}</td>
-    <td style="font-size:10px;color:var(--text-faint)">${item.cached_date || '\u2014'}</td>
+    <td style="font-size:10px;color:var(--text-muted)">${item.cached_date || '\u2014'}</td>
   </tr>`;
 }
 
@@ -2860,7 +2887,7 @@ function _renderLibraryChartLoading(host, symbol) {
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <div>
           <div style="font-size:16px;font-weight:700;color:var(--text-primary)">${symbol} — Strategy Comparison</div>
-          <div style="font-size:11px;color:var(--text-faint);margin-top:2px">Walk-forward backtest &bull; $10,000 starting capital &bull; 5 strategies</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Walk-forward backtest &bull; $10,000 starting capital &bull; 5 strategies</div>
         </div>
       </div>
       <div class="loader"><div class="spinner"></div>Loading backtest data…</div>
@@ -2890,7 +2917,7 @@ function _renderLibraryChartCard(host, json, symbol) {
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <div>
           <div style="font-size:16px;font-weight:700;color:var(--text-primary)">${symbol} — Strategy Comparison</div>
-          <div style="font-size:11px;color:var(--text-faint);margin-top:2px">Walk-forward backtest &bull; $10,000 starting capital &bull; 5 strategies</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Walk-forward backtest &bull; $10,000 starting capital &bull; 5 strategies</div>
         </div>
       </div>
       <div class="bt-chart-wrap"><canvas id="libCanvas"></canvas></div>
@@ -3012,7 +3039,7 @@ function pollBatchStatus() {
                 <span class="spinner"></span>
                 ${json.completed}/${json.total} complete${progressDetail}
               </span>
-              <span style="color:var(--text-faint);font-size:11px">${timeStr}</span>
+              <span style="color:var(--text-muted);font-size:11px">${timeStr}</span>
             </div>
             <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
             ${json.failed_symbols && json.failed_symbols.length > 0
@@ -3403,7 +3430,7 @@ function renderLeadersTable() {
   const content = document.getElementById('leadersContent');
   const counter = document.getElementById('leadersVisibleCount');
   if (!_leadersData || !_leadersData.length) {
-    content.innerHTML = '<div style="color:var(--text-faint);padding:20px;text-align:center">No tickers to display.</div>';
+    content.innerHTML = '<div style="color:var(--text-muted);padding:20px;text-align:center">No tickers to display.</div>';
     if (counter) counter.textContent = '';
     return;
   }
@@ -3417,7 +3444,7 @@ function renderLeadersTable() {
 
   if (!rows.length) {
     content.innerHTML = `
-      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:24px;text-align:center;color:var(--text-faint)">
+      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:24px;text-align:center;color:var(--text-muted)">
         No tickers match the current filters. <button class="ldr-chip" onclick="resetLeadersFilters()" style="margin-left:8px">Clear filters</button>
       </div>`;
     return;
