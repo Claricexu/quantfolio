@@ -40,6 +40,57 @@
   .container { position: relative; z-index: 1; max-width: 1060px; margin: 0 auto; padding: 32px 20px; }
   .fade-in { animation: fadeUp 0.4s ease-out; }
 
+  /* Round 8a Phase 3 (Item 3, deferred Round 7a): respect the user's
+     prefers-reduced-motion setting. Vestibular-disorder users and screen-
+     reader users who keep this enabled get instant state changes instead of
+     translateY/opacity ramps. Covers:
+       - .fade-in   (mounts of Daily Report / Strategy Lab / Leader Detector
+                     verdict cards + chart cards on inline expansion)
+       - .modal-overlay fadeUp (rebuild modal + detail-modal overlay)
+       - .spinner / .pulse / .shimmer (decorative loaders — kept visible but
+                     animation-duration shortened to 0.01s so the layout
+                     doesn't break, just stops the spin)
+       - generic transition:* on chips / buttons / sortable headers (the
+                     0.15-0.2s color/border transitions add up across a
+                     1,414-row Leader Detector table on hover-scroll).
+     The conventional WCAG-2.3.3 sledgehammer (animation-duration:0.01s !important
+     on *) breaks Chart.js's draw timing, so we whitelist the specific
+     application-defined motion families and leave Chart.js alone (it
+     already honors prefers-reduced-motion via its own internal logic when
+     the chart is constructed). 0.01s rather than 0 keeps any logic that
+     listens for animationend / transitionend firing, just imperceptibly. */
+  @media (prefers-reduced-motion: reduce) {
+    .fade-in {
+      animation: none;
+    }
+    .skeleton-empty,
+    .modal-overlay,
+    .detail-modal-overlay {
+      animation-duration: 0.01s !important;
+    }
+    .spinner,
+    .pulse,
+    .shimmer {
+      animation-duration: 0.01s !important;
+      animation-iteration-count: 1 !important;
+    }
+    .chip,
+    .btn,
+    .btn-sm,
+    .ldr-chip,
+    .ldr-sort-th,
+    th.sortable,
+    tbody tr,
+    td.symbol-cell,
+    .detail-inline-close,
+    .app-banner .ab-close,
+    .skeleton-empty details summary,
+    .progress-fill,
+    .sort-arrow {
+      transition-duration: 0.01s !important;
+    }
+  }
+
   /* Header */
   .header-dot { width:10px; height:10px; border-radius:50%; background:var(--green-text);
     box-shadow:0 0 12px var(--green-text); animation: pulse 2s infinite; }
@@ -1707,7 +1758,7 @@ function buildReportRow(r) {
   const gfScore = sc.score != null ? sc.score : null;
   return `
   <tr>
-    <td class="mono symbol-cell" style="font-weight:700;color:var(--text-primary)" onclick="openSymbolDetail(event, '${r.symbol}')" title="Click for fundamental detail">${r.symbol}</td>
+    <td class="mono symbol-cell" style="font-weight:700;color:var(--text-primary)" onclick="openSymbolDetail(event, '${r.symbol}')" tabindex="-1" title="Click for fundamental detail">${r.symbol}</td>
     <td class="mono" style="color:var(--text-muted)">${fmt$(r.current_price)}</td>
     <td>${v2pct != null ? pctHTML(v2pct) : '\u2014'}</td>
     <td>${v2.signal ? signalHTML(v2.signal) : '\u2014'}</td>
@@ -1859,6 +1910,17 @@ async function openSymbolDetail(evt, symbol) {
   const clickedRow = evt.currentTarget.closest('tr');
   if (!clickedRow) return;
 
+  // Round 8a Phase 3 (Item 4): capture the trigger element so closeDetail can
+  // restore focus to it when Escape (or the close button) dismisses the card.
+  // evt.currentTarget is the actual onclick target — td.symbol-cell on Daily
+  // Report / Leader Detector, the <tr> on Strategy Lab. Falls back to the
+  // pre-click focused element if the trigger isn't focusable. .focus() on a
+  // non-tabindex element is a no-op, not an error, so this is safe even for
+  // mouse users who never had keyboard focus on the trigger.
+  const _prevFocus = (evt.currentTarget && typeof evt.currentTarget.focus === 'function')
+    ? evt.currentTarget
+    : document.activeElement;
+
   // Phase 3 / FB-8: dispatch by ancestor table \u2014 Strategy Lab's #libTable
   // gets the chart card; everything else (Daily Report, Leader Detector)
   // gets the verdict card. Single dispatcher, single openDetail state.
@@ -1883,11 +1945,22 @@ async function openSymbolDetail(evt, symbol) {
     ? _mountInlineDetail(clickedRow, symbol)
     : _mountModalDetail(symbol);
 
-  if (mode === 'modal') {
-    // Escape closes the modal. Stored on module-level so closeDetail can detach.
-    _detailEscHandler = (e) => { if (e.key === 'Escape') closeDetail(); };
-    document.addEventListener('keydown', _detailEscHandler);
-  }
+  // Round 8a Phase 3 (Item 4, deferred Round 7a): Escape closes the open
+  // detail card in BOTH modes (modal and inline). Inline previously had no
+  // keydown handler — only modal mode below 700px was Escape-dismissible.
+  // Now the inline verdict card on Daily Report and Leader Detector and the
+  // inline chart card on Strategy Lab all close on Escape, matching the
+  // modal-mode behavior on narrower viewports.
+  //
+  // Focus restoration: capture document.activeElement at open time and call
+  // .focus() on it when Escape closes the card. The trigger row's td.symbol-cell
+  // and tr (Strategy Lab) don't carry tabindex today, so for keyboard users
+  // who tabbed through nothing-focusable on the trigger, document.activeElement
+  // will be the previous focus (often a chip / select). For mouse users this
+  // is still safe — calling .focus() on a non-focusable element is a no-op,
+  // not an error. Stored on openDetail so closeDetail can find it.
+  _detailEscHandler = (e) => { if (e.key === 'Escape') closeDetail(); };
+  document.addEventListener('keydown', _detailEscHandler);
 
   const host = detailRowEl.querySelector('.detail-card-host');
   // Sophia's deferred item 15 / round-7a Issue A: skip the loading paint
@@ -1903,7 +1976,7 @@ async function openSymbolDetail(evt, symbol) {
   }
 
   const abortCtrl = new AbortController();
-  openDetail = { symbol, kind, rowEl: clickedRow, detailRowEl, mode, abortCtrl };
+  openDetail = { symbol, kind, rowEl: clickedRow, detailRowEl, mode, abortCtrl, prevFocus: _prevFocus };
 
   // Round 7a perf fix (FB-2 critical): the pre-fetch focus + scrollIntoView
   // pair forced two synchronous layout flushes against a freshly-mutated
@@ -2006,9 +2079,21 @@ function closeDetail() {
   if (openDetail.detailRowEl && openDetail.detailRowEl.parentNode) {
     openDetail.detailRowEl.parentNode.removeChild(openDetail.detailRowEl);
   }
-  if (openDetail.mode === 'modal' && _detailEscHandler) {
+  // Round 8a Phase 3 (Item 4): Esc handler is now attached in both inline and
+  // modal modes (was modal-only). Detach unconditionally on close.
+  if (_detailEscHandler) {
     document.removeEventListener('keydown', _detailEscHandler);
     _detailEscHandler = null;
+  }
+
+  // Round 8a Phase 3 (Item 4): restore focus to the trigger element if it
+  // can take focus. Wrap in try/catch — focus() can throw on detached nodes
+  // (which can happen if the user sorted the table while the card was open
+  // and the trigger row got rebuilt; that path closeDetails() via
+  // sortLibraryTable, but as a defense-in-depth measure swallow any error).
+  const restore = openDetail.prevFocus;
+  if (restore && document.body.contains(restore) && typeof restore.focus === 'function') {
+    try { restore.focus({ preventScroll: true }); } catch (_) { /* noop */ }
   }
 
   // Round 7a perf fix (FB-2 follow-up): the previous focus-restore block
@@ -2678,7 +2763,11 @@ function buildLibraryRow(item) {
   // through the same openSymbolDetail dispatcher Phase 2 wired up. Detection
   // of "chart" vs "verdict" mode happens inside openSymbolDetail by walking
   // the clicked row's ancestor table.
-  return `<tr onclick="openSymbolDetail(event, '${item.symbol}')">
+  // Round 8a Phase 3 (Item 4): tabindex="-1" makes the row programmatically
+  // focusable so closeDetail() can restore focus after Escape dismisses the
+  // chart card. The row is still not Tab-reachable for sighted keyboard
+  // users (that would clutter the tab order across hundreds of rows).
+  return `<tr onclick="openSymbolDetail(event, '${item.symbol}')" tabindex="-1">
     <td class="mono symbol-cell" style="font-weight:700;color:var(--text-primary)">${item.symbol}</td>
     <td style="font-weight:600;color:${strategyColor(bestKey)}"><span class="bt-legend-dot" style="background:${strategyColor(bestKey)}"></span>${strategyShortName(bestKey)}</td>
     <td class="mono" style="color:${retColor(bestRet || 0)}">${bestRet != null ? (bestRet >= 0 ? '+' : '') + bestRet + '%' : '\u2014'}</td>
@@ -3402,7 +3491,7 @@ function renderLeadersTable() {
       <tr style="border-top:1px solid var(--border);${rowBg}">
         <td style="padding:8px;text-align:center">${selCell}</td>
         <td class="symbol-cell" style="padding:8px;font-weight:600;color:var(--text-primary)"
-            onclick="openSymbolDetail(event, '${escapeHTML(sym)}')" title="Click for fundamental detail">${escapeHTML(sym)}</td>
+            onclick="openSymbolDetail(event, '${escapeHTML(sym)}')" tabindex="-1" title="Click for fundamental detail">${escapeHTML(sym)}</td>
         <td style="padding:8px;color:var(--text-secondary);font-size:12px">${escapeHTML(r.name || '')}</td>
         <td style="padding:8px;color:var(--text-muted);font-size:11px">${escapeHTML(sector)}</td>
         <td style="padding:8px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text-secondary)">${mcap}</td>
