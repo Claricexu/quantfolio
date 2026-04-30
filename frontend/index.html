@@ -993,10 +993,15 @@ function buildVerdictCard(v) {
   // Each row is [label, value, peerKey] where peerKey names the peer_median_*
   // field on the verdict payload (without the "peer_median_" prefix). peerKey
   // = null marks a categorical / non-comparable row \u2014 em-dash renders in the
-  // peer column to keep visual rhythm. SVR-vs-sector row dropped: peer-median
-  // SVR now occupies that comparison slot. fcf_margin_ttm added per Round 7d
+  // peer column to keep visual rhythm. fcf_margin_ttm added per Round 7d
   // owner approval (was absent before; backend has carried the field for
   // multiple rounds).
+  // Round 8a Phase 3: SVR row removed from this grid. SVR is shown only on
+  // the live four-card row at the top of Ticker Lookup (sourced from yfinance
+  // via /api/predict-compare); that card now carries its own "peer 13.3x"
+  // annotation so the comparison story still ships. Showing SVR in both
+  // places produced confusing divergences when live and CSV-frozen values
+  // disagreed (Round 7d's "as of" chip helped but didn't fully fix it).
   const rows = [
     ['Revenue (TTM)',        fmtCap(v.revenue_ttm),                                                  null],
     ['Revenue YoY',          fmtPct(v.revenue_yoy_growth),                                           'revenue_yoy_growth'],
@@ -1009,7 +1014,6 @@ function buildVerdictCard(v) {
     ['Free Cash Flow',       fmtCap(v.free_cash_flow_ttm),                                           null],
     ['Rule of 40',           v.rule_40_score != null ? v.rule_40_score.toFixed(1) : '\u2014',       'rule_40_score'],
     ['ROIC (TTM)',           fmtPct(v.roic_ttm),                                                     'roic_ttm'],
-    ['SVR',                  v.svr != null ? v.svr.toFixed(1)+'x' : '\u2014',                       'svr'],
     ['Sector Rank',          v.market_cap_rank_in_sector != null ? ('#'+v.market_cap_rank_in_sector+(v.sector_peers ? ' of '+v.sector_peers : '')) : '\u2014', null],
     ['Shares 3Y Growth',     fmtPct(v.shares_growth_3y),                                             null],
     // Round 7c verification round 8: read canonical classifier fields
@@ -1206,6 +1210,22 @@ function buildCompareCard(d) {
   // renders correctly \u2014 only the explanatory tooltip is missed on race).
   const peIsETF = !!(window._etfTickersSet && d && d.symbol && window._etfTickersSet.has(d.symbol));
 
+  // Round 8a Phase 3: peer-median SVR annotation on the live SVR card.
+  // Sourced from d.peer_median_svr (injected by api_server._inject_classifier_fields
+  // from screener_results.csv via verdict_provider). Rendered as a small
+  // subtitle below the existing svr-hint label so the live yfinance value
+  // stays primary. Owner-locked decisions:
+  //  - Render whenever peer_median_svr is non-null, even if live SVR is
+  //    null (the em-dash branch below) \u2014 the peer comparison still informs.
+  //  - Omit entirely for ETFs (peer-median bucket is industry_group, which
+  //    classifier returns "Unknown" for; ETF detection mirrors the P/E
+  //    card's peIsETF pattern).
+  // This consolidates SVR into a single card; the verdict-card SVR row
+  // was deleted in the same commit so the two values can no longer diverge.
+  const peerSvrLine = (!peIsETF && d.peer_median_svr != null)
+    ? `<div style="font-size:10px;color:var(--text-faint);margin-top:2px">peer ${d.peer_median_svr.toFixed(1)}x</div>`
+    : '';
+
   let svrBlock = '';
   if (d.svr != null) {
     svrBlock = `
@@ -1214,6 +1234,7 @@ function buildCompareCard(d) {
           <div class="label">SVR</div>
           <div class="value" style="font-size:20px;color:${svrColor(d.svr)}">${d.svr.toFixed(1)}x</div>
           <div class="svr-hint" style="color:${svrColor(d.svr)};opacity:0.85">${svrLabel(d.svr)}</div>
+          ${peerSvrLine}
         </div>
         <div class="svr-box" style="background:var(--bg-cell)"><div class="label">Market Cap</div>
           <div class="value" style="font-size:15px;color:var(--text-secondary)">${fmtCap(d.market_cap)}</div></div>
@@ -1228,6 +1249,7 @@ function buildCompareCard(d) {
         <div class="svr-box" style="background:#0e1e2e;border:1px solid var(--bg-cell)">
           <div class="label">SVR</div>
           <div class="value" style="font-size:20px;color:var(--text-secondary)">\u2014</div>
+          ${peerSvrLine}
         </div>
         <div class="svr-box" style="background:var(--bg-cell)"><div class="label">Market Cap</div>
           <div class="value" style="font-size:15px;color:var(--text-secondary)">${fmtCap(d.market_cap)}</div></div>

@@ -472,6 +472,20 @@ def _inject_classifier_fields(result: dict, symbol: str) -> dict:
                         result["pe_trailing"] = float(pe_raw)
                     except (TypeError, ValueError):
                         result["pe_trailing"] = None
+                # Round 8a Phase 3: surface peer_median_svr on compare results
+                # so the live SVR card on Ticker Lookup can annotate "peer 13.3x"
+                # alongside the live yfinance value. The verdict-card SVR row
+                # was removed in the same change to eliminate the dual-source
+                # divergence (live yfinance vs CSV-frozen). verdict_provider
+                # whitelists peer_median_svr, so the row value is already
+                # float-typed when present; coerce defensively for the cached
+                # path where the row dict may still hold a CSV string.
+                psvr_raw = row.get("peer_median_svr")
+                if psvr_raw not in (None, ""):
+                    try:
+                        result["peer_median_svr"] = float(psvr_raw)
+                    except (TypeError, ValueError):
+                        result["peer_median_svr"] = None
         except Exception:
             pass
     sec, ig, ind = _classify_symbol(symbol, sic, result.get("industry"))
