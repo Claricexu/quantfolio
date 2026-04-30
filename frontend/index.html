@@ -455,7 +455,13 @@
     </div>
     <p class="search-hint" id="modelHint">Compares Lite (13 features) and Pro (22 features) models with consensus signal and confidence scoring</p>
 
-    <div id="predResult"></div>
+    <!-- Round 8a Phase 3: aria-live on the persistent container so screen-reader
+         users hear "Running Lite and Pro models..." when runCompare() swaps in
+         the loaderHTML, and again when the result HTML lands. The wrapper is
+         never destroyed across the load -> loaded transition (loaderHTML and
+         buildCompareCard both write into innerHTML), so the live-region exists
+         in the DOM both before and after the swap. -->
+    <div id="predResult" aria-live="polite" aria-busy="false"></div>
     <div id="backtestSection"></div>
 
     <div style="margin-top:28px">
@@ -475,8 +481,14 @@
       </div>
       <button class="btn-sm" onclick="refreshReport()" id="btnRefreshReport">Generate Report</button>
     </div>
-    <div id="reportStatus"></div>
-    <div id="reportContent"></div>
+    <div id="reportStatus" aria-live="polite"></div>
+    <!-- Round 8a Phase 3: aria-live on the persistent #reportContent wrapper
+         so the loader announcement ("Loading Lite + Pro report...") and the
+         subsequent table render are both surfaced to screen readers. The
+         empty-state skeleton inside this container has its own role=status,
+         which is preserved (innerHTML swap inside an aria-live container is
+         fine; nested live regions don't double-announce). -->
+    <div id="reportContent" aria-live="polite" aria-busy="false"></div>
   </div>
 
   <!-- ================================================================= -->
@@ -513,7 +525,11 @@
     <div id="batchStatus"></div>
     <div id="libCallout"></div>
     <p class="search-hint">Click a row to view its equity curve.</p>
-    <div id="libTableWrap"></div>
+    <!-- Round 8a Phase 3: aria-live so the "Loading backtest library..."
+         loader and the rendered table both announce. innerHTML on this
+         wrapper is swapped by renderLibraryTable / loaderHTML; the wrapper
+         itself persists. -->
+    <div id="libTableWrap" aria-live="polite" aria-busy="false"></div>
     <!-- Round 7a Phase 3 / FB-8: chart now expands inline beneath the clicked
          library row (or as a modal overlay below 700px). The previous
          #libChartSection bottom-of-tab container was removed; the chart card
@@ -540,24 +556,24 @@
       <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center">
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
           <span style="font-size:10px;letter-spacing:1px;color:var(--text-muted);font-weight:600">SHOW</span>
-          <button class="ldr-chip active" data-filter="sel" data-value="all"      onclick="onLeadersFilterChip(this)">All <span class="ldr-chip-n" id="cntSelAll">&mdash;</span></button>
-          <button class="ldr-chip"        data-filter="sel" data-value="selected" onclick="onLeadersFilterChip(this)">Selected only <span class="ldr-chip-n" id="cntSelSelected">&mdash;</span></button>
+          <button class="ldr-chip active" aria-pressed="true"  data-filter="sel" data-value="all"      onclick="onLeadersFilterChip(this)">All <span class="ldr-chip-n" id="cntSelAll">&mdash;</span></button>
+          <button class="ldr-chip"        aria-pressed="false" data-filter="sel" data-value="selected" onclick="onLeadersFilterChip(this)">Selected only <span class="ldr-chip-n" id="cntSelSelected">&mdash;</span></button>
         </div>
         <div style="width:1px;height:20px;background:var(--border)"></div>
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
           <span style="font-size:10px;letter-spacing:1px;color:var(--text-muted);font-weight:600">VERDICT</span>
-          <button class="ldr-chip active" data-filter="verdict" data-value="ALL"    onclick="onLeadersFilterChip(this)">All</button>
-          <button class="ldr-chip"        data-filter="verdict" data-value="LEADER" onclick="onLeadersFilterChip(this)">Leader</button>
-          <button class="ldr-chip"        data-filter="verdict" data-value="GEM"    onclick="onLeadersFilterChip(this)">Gem</button>
-          <button class="ldr-chip"        data-filter="verdict" data-value="WATCH"  onclick="onLeadersFilterChip(this)">Watch</button>
-          <button class="ldr-chip"        data-filter="verdict" data-value="AVOID"  onclick="onLeadersFilterChip(this)">Avoid</button>
+          <button class="ldr-chip active" aria-pressed="true"  data-filter="verdict" data-value="ALL"    onclick="onLeadersFilterChip(this)">All</button>
+          <button class="ldr-chip"        aria-pressed="false" data-filter="verdict" data-value="LEADER" onclick="onLeadersFilterChip(this)">Leader</button>
+          <button class="ldr-chip"        aria-pressed="false" data-filter="verdict" data-value="GEM"    onclick="onLeadersFilterChip(this)">Gem</button>
+          <button class="ldr-chip"        aria-pressed="false" data-filter="verdict" data-value="WATCH"  onclick="onLeadersFilterChip(this)">Watch</button>
+          <button class="ldr-chip"        aria-pressed="false" data-filter="verdict" data-value="AVOID"  onclick="onLeadersFilterChip(this)">Avoid</button>
         </div>
         <div style="width:1px;height:20px;background:var(--border)"></div>
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
           <span style="font-size:10px;letter-spacing:1px;color:var(--text-muted);font-weight:600">ARCHETYPE</span>
-          <button class="ldr-chip active" data-filter="archetype" data-value="ALL"    onclick="onLeadersFilterChip(this)">All</button>
-          <button class="ldr-chip"        data-filter="archetype" data-value="GROWTH" onclick="onLeadersFilterChip(this)">Growth</button>
-          <button class="ldr-chip"        data-filter="archetype" data-value="MATURE" onclick="onLeadersFilterChip(this)">Mature</button>
+          <button class="ldr-chip active" aria-pressed="true"  data-filter="archetype" data-value="ALL"    onclick="onLeadersFilterChip(this)">All</button>
+          <button class="ldr-chip"        aria-pressed="false" data-filter="archetype" data-value="GROWTH" onclick="onLeadersFilterChip(this)">Growth</button>
+          <button class="ldr-chip"        aria-pressed="false" data-filter="archetype" data-value="MATURE" onclick="onLeadersFilterChip(this)">Mature</button>
         </div>
         <div style="width:1px;height:20px;background:var(--border)"></div>
         <div style="display:flex;align-items:center;gap:6px">
@@ -588,7 +604,11 @@
         <span id="leadersIndustryGroupChips" style="display:flex;flex-wrap:wrap;gap:6px"></span>
       </div>
     </div>
-    <div id="leadersContent"></div>
+    <!-- Round 8a Phase 3: aria-live so "Loading leader universe..." announces
+         and the rendered table row count surfaces to screen readers. Same
+         pattern as #reportContent / #predResult / #libTableWrap — persistent
+         wrapper, innerHTML swap inside. -->
+    <div id="leadersContent" aria-live="polite" aria-busy="false"></div>
   </div>
 
   <!-- Footer -->
@@ -3202,12 +3222,14 @@ function populateIndustryGroupChips() {
   const active = f.industry_group;
   const chips = [
     `<button class="ldr-chip${active === 'ALL' ? ' active' : ''}"
+             aria-pressed="${active === 'ALL'}"
              data-filter="industry_group" data-value="ALL"
              onclick="onLeadersFilterChip(this)">All
        <span class="ldr-chip-n">(${pool.length})</span>
      </button>`,
   ].concat(groups.map(g =>
     `<button class="ldr-chip${active === g ? ' active' : ''}"
+             aria-pressed="${active === g}"
              data-filter="industry_group" data-value="${escapeHTML(g)}"
              onclick="onLeadersFilterChip(this)">${escapeHTML(g)}
        <span class="ldr-chip-n">(${counts.get(g)})</span>
@@ -3408,9 +3430,13 @@ function onLeadersFilterChip(btn) {
   const value  = btn.dataset.value;
   if (!filter || value == null) return;
   _leadersFilter[filter] = value;
-  // Update the active class within this filter group only.
-  document.querySelectorAll(`#leadersControls .ldr-chip[data-filter="${filter}"]`).forEach(b =>
-    b.classList.toggle('active', b.dataset.value === value));
+  // Update the active class AND aria-pressed within this filter group only.
+  // aria-pressed mirrors .active for screen-reader parity (Round 8a Phase 3).
+  document.querySelectorAll(`#leadersControls .ldr-chip[data-filter="${filter}"]`).forEach(b => {
+    const isActive = b.dataset.value === value;
+    b.classList.toggle('active', isActive);
+    b.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+  });
   // Sector dropdown and Industry Group chips both cross-narrow with the
   // OTHER active filters, so resync both before rendering. Each repopulator
   // also falls back to ALL if its previously-selected value no longer has
@@ -3444,10 +3470,11 @@ function onLeadersSort(col) {
 function resetLeadersFilters() {
   _leadersFilter = { sel: 'all', verdict: 'ALL', archetype: 'ALL', sector: 'ALL', industry_group: 'ALL' };
   _leadersSort = null;
-  // Reset chip active states.
+  // Reset chip active states (and aria-pressed mirror, Round 8a Phase 3).
   document.querySelectorAll('#leadersControls .ldr-chip').forEach(b => {
     const isDefault = b.dataset.value === 'all' || b.dataset.value === 'ALL';
     b.classList.toggle('active', isDefault);
+    b.setAttribute('aria-pressed', isDefault ? 'true' : 'false');
   });
   const sel = document.getElementById('leadersSectorSelect');
   if (sel) sel.value = 'ALL';
