@@ -747,15 +747,49 @@ const STRATEGY_LAB_TICKER_COUNT = 174;
 // Leader Detector universe — row count of universe_prescreened.csv.
 // Current = 1414 [verified 2026-04-21].
 const LEADER_UNIVERSE_SIZE = 1414;
-// C-2: strategy keys that actually USE SELL signals. Mirrors
-// api_server.py::_send_signal_alerts _full_keys — if the dashboard shows
-// a SELL for a stock whose best strategy is NOT one of these, the email
-// path suppresses it. See downgradeSells().
-const FULL_SIGNAL_STRATEGY_KEYS = new Set(['lite_full', 'pro_full']);
+// Round 8b: backtest-validating strategy keys. Email and dashboard share
+// the same predicate here so the high-conviction sections always match
+// what _send_signal_alerts emits — classifyAlertRow() below is the single
+// source of truth, mirroring api_server.py::_classify_alert.
+const BUY_VALIDATING_KEYS_PRO  = new Set(['pro_buyonly', 'pro_full']);
+const BUY_VALIDATING_KEYS_LITE = new Set(['lite_buyonly', 'lite_full']);
+const SELL_GATE_KEYS           = new Set(['buyhold', 'lite_buyonly', 'pro_buyonly']);
 // C-2 copy — exact string approved by reviewers; keep the "i" tooltip + pill.
 const DOWNGRADE_TOOLTIP =
   "This stock's best-performing strategy never sells — holding through "
   + "downturns beat timing exits in backtests. SELL signal hidden.";
+
+// Round 8b: dashboard / email rule-alignment. Mirrors
+// api_server.py::_classify_alert. Returns 'BUY' | 'SELL' | null. The high-
+// conviction sections render rows where this returns non-null; the SELL
+// downgrade pill renders for displayed-SELL rows that don't qualify here.
+function classifyAlertRow(r, bestMap) {
+  if (!r) return null;
+  const v2 = r.v2 || {};
+  const v3 = r.v3 || {};
+  const liteSig = (v2.signal || 'HOLD').toUpperCase();
+  const proSig  = (v3.signal || 'HOLD').toUpperCase();
+  const bs = bestMap && bestMap[r.symbol];
+  const bestKey = (bs && bs.key) || null;
+
+  if (liteSig === 'HOLD' && proSig === 'HOLD') return null;
+  if ((liteSig === 'BUY'  && proSig === 'SELL') ||
+      (liteSig === 'SELL' && proSig === 'BUY')) return null;
+
+  if (liteSig === 'BUY' && proSig === 'BUY') return 'BUY';
+  if (proSig === 'BUY' && liteSig === 'HOLD') {
+    return BUY_VALIDATING_KEYS_PRO.has(bestKey) ? 'BUY' : null;
+  }
+  if (liteSig === 'BUY' && proSig === 'HOLD') {
+    return BUY_VALIDATING_KEYS_LITE.has(bestKey) ? 'BUY' : null;
+  }
+  if (proSig === 'SELL' || liteSig === 'SELL') {
+    if (SELL_GATE_KEYS.has(bestKey)) return null;
+    if (bestKey === 'pro_full'  && proSig  === 'SELL') return 'SELL';
+    if (bestKey === 'lite_full' && liteSig === 'SELL') return 'SELL';
+  }
+  return null;
+}
 
 // Init
 document.getElementById('dateStr').textContent = new Date()
@@ -1569,16 +1603,14 @@ function pollReport(statusEl) {
   }, 5000);
 }
 
-// ─── C-2: dashboard / email SELL-filter parity ───────────────────────────
-// The email path (_send_signal_alerts in api_server.py) only emails a SELL
-// when the ticker's best backtested strategy is 'lite_full' or 'pro_full'
-// (i.e. actually uses SELL signals). Buy-only / Buy & Hold "bests" mean a
-// SELL would have historically hurt returns, so acting on it is noise.
-//
-// We apply that SAME filter here client-side. Rows that would be SELL get
-// downgraded to HOLD in a copy (we never mutate the server response) and
-// flagged with `_sell_downgraded = true` so buildReportRow can render a
-// small "(i)" info pill with DOWNGRADE_TOOLTIP next to the HOLD.
+// ─── Dashboard / email rule-alignment ────────────────────────────────────
+// Round 8b: the email path (_send_signal_alerts in api_server.py) decides
+// fire/suppress via _classify_alert (mirrored in classifyAlertRow above).
+// Rows that DISPLAY as SELL but the email path would NOT alert on (best
+// strategy in the SELL hard gate, or null/non-validating, or not the
+// matching full-signal model) get downgraded to HOLD here and flagged
+// with `_sell_downgraded = true` so buildReportRow renders the "(i)"
+// pill with DOWNGRADE_TOOLTIP next to the HOLD.
 //
 // IMPORTANT: this happens BEFORE the summary-card counts are computed —
 // that's why summary.consensus_sell / consensus_hold are RECOMPUTED below
@@ -1591,9 +1623,7 @@ function downgradeSells(rows, bestMap) {
   let downgraded = 0;
   const processed = rows.map(r => {
     if (r && r.consensus_signal === 'SELL') {
-      const bs = bestMap && bestMap[r.symbol];
-      const key = bs && bs.key;
-      if (!FULL_SIGNAL_STRATEGY_KEYS.has(key)) {
+      if (classifyAlertRow(r, bestMap) !== 'SELL') {
         downgraded++;
         return Object.assign({}, r, {
           consensus_signal: 'HOLD',
@@ -1640,11 +1670,12 @@ function renderReport(json) {
   const recomputedBuy  = data.filter(r => r.consensus_signal === 'BUY').length;
   const recomputedSell = data.filter(r => r.consensus_signal === 'SELL').length;
   const recomputedHold = data.filter(r => r.consensus_signal === 'HOLD').length;
-  // HIGH-confidence count also shrinks: a downgraded row's model-agreement
-  // confidence was HIGH but the actionable bucket no longer applies, so we
-  // only count rows still rendered as HIGH.
+  // Round 8b: the actionable bucket is now whatever the email path would
+  // fire — consensus + backtest-validated single-model paths. Count rows
+  // where classifyAlertRow returns BUY or SELL so the card matches the
+  // High-Conviction sections directly below.
   const recomputedHighConf = data.filter(r =>
-    r.confidence === 'HIGH' && !r._sell_downgraded
+    classifyAlertRow(r, _bestStratMap) !== null
   ).length;
 
   const sentClass = 'sentiment-' + (summary.market_sentiment || 'MIXED');
@@ -1668,7 +1699,7 @@ function renderReport(json) {
       </div>
       <div class="summary-card">
         <div class="sc-value" style="color:var(--green-text)">${recomputedHighConf}</div>
-        <div class="sc-label">High Confidence</div>
+        <div class="sc-label">High Conviction</div>
       </div>
       <div class="summary-card">
         <div class="sc-value" style="color:var(--red-text)">${summary.model_conflict || 0}</div>
@@ -1680,24 +1711,26 @@ function renderReport(json) {
       </div>
     </div>`;
 
-  // C-2: a downgraded row is no longer actionable, so it must NOT appear in
-  // the High-Confidence SELL list even though the underlying model confidence
-  // was HIGH. Filter _sell_downgraded out before partitioning.
-  const highConf = data.filter(r => r.confidence === 'HIGH' && !r._sell_downgraded);
-  const buys = highConf.filter(r => r.consensus_signal === 'BUY').sort((a,b) => (b.avg_pct_change||0) - (a.avg_pct_change||0));
-  const sells = highConf.filter(r => r.consensus_signal === 'SELL').sort((a,b) => (a.avg_pct_change||0) - (b.avg_pct_change||0));
+  // Round 8b: rule-aligned with email. classifyAlertRow returns BUY/SELL
+  // only for rows the email path would alert on — consensus + backtest-
+  // validated single-model paths. Sort buys by best predicted upside,
+  // sells by worst predicted downside (most negative first).
+  const buys  = data.filter(r => classifyAlertRow(r, _bestStratMap) === 'BUY')
+                    .sort((a,b) => (b.avg_pct_change||0) - (a.avg_pct_change||0));
+  const sells = data.filter(r => classifyAlertRow(r, _bestStratMap) === 'SELL')
+                    .sort((a,b) => (a.avg_pct_change||0) - (b.avg_pct_change||0));
 
   let highConfHTML = '';
   if (buys.length > 0) {
-    highConfHTML += `<div class="section-label" style="margin-top:8px"><span style="color:var(--green-text);font-size:16px">▲</span> High-Confidence BUY (Both Models Agree)</div>`;
+    highConfHTML += `<div class="section-label" style="margin-top:8px"><span style="color:var(--green-text);font-size:16px">▲</span> High-Conviction BUY</div>`;
     highConfHTML += buildReportTable(buys);
   }
   if (sells.length > 0) {
-    highConfHTML += `<div class="section-label"><span style="color:var(--red-text);font-size:16px">▼</span> High-Confidence SELL (Both Models Agree)</div>`;
+    highConfHTML += `<div class="section-label"><span style="color:var(--red-text);font-size:16px">▼</span> High-Conviction SELL</div>`;
     highConfHTML += buildReportTable(sells);
   }
   if (buys.length === 0 && sells.length === 0) {
-    highConfHTML += `<div class="scan-banner">No high-confidence signals today - models disagree or all HOLD.</div>`;
+    highConfHTML += `<div class="scan-banner">No high-conviction signals today.</div>`;
   }
 
   // Full table

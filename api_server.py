@@ -108,44 +108,109 @@ ALERT_TO      = [e.strip() for e in os.environ.get("ALERT_TO", "").split(",") if
 ALERT_SUBJECT = os.environ.get("ALERT_SUBJECT", "Quantfolio Signal Brief")
 
 
+_BUY_VALIDATING_KEYS_PRO  = ('pro_buyonly', 'pro_full')
+_BUY_VALIDATING_KEYS_LITE = ('lite_buyonly', 'lite_full')
+_SELL_GATE_KEYS           = ('buyhold', 'lite_buyonly', 'pro_buyonly')
+
+
+def _row_signals(r):
+    """Extract (lite_sig, pro_sig) from a daily-report row, defaulting to HOLD."""
+    v2 = r.get('v2') or {}
+    v3 = r.get('v3') or {}
+    lite_sig = (v2.get('signal') or 'HOLD').upper()
+    pro_sig  = (v3.get('signal') or 'HOLD').upper()
+    return lite_sig, pro_sig
+
+
+def _classify_alert(lite_sig, pro_sig, best_key):
+    """Decide whether a row qualifies for a BUY or SELL email alert.
+
+    Returns ('BUY'|'SELL', path_label) when the row qualifies, or
+    (None, suppression_reason) otherwise. The path label / reason string is
+    suitable for direct logging — see the [Alert] log lines emitted in
+    ``_send_signal_alerts``. Pure function: no globals, no I/O — so this is
+    table-tested in tests/unit/test_signal_alerts.py.
+
+    Rules (Round 8b — backtest-validated single-model paths):
+      BUY fires when ANY of:
+        (a) Both Lite and Pro signaled BUY (consensus).
+        (b) Only Pro signaled BUY (Lite=HOLD) AND best ∈ {pro_buyonly, pro_full}.
+        (c) Only Lite signaled BUY (Pro=HOLD) AND best ∈ {lite_buyonly, lite_full}.
+      SELL fires when:
+        Hard gate — best ∈ {buyhold, lite_buyonly, pro_buyonly} → suppress.
+        Path A — best == pro_full AND Pro=SELL (Lite=HOLD or SELL, not BUY).
+        Path B — best == lite_full AND Lite=SELL (Pro=HOLD or SELL, not BUY).
+      Conflict (Lite/Pro disagree BUY vs SELL) → never fires.
+      best_strategy null/missing → only path (a) can fire; SELL never fires.
+    """
+    if lite_sig == 'HOLD' and pro_sig == 'HOLD':
+        return None, 'no model signals'
+    if {lite_sig, pro_sig} == {'BUY', 'SELL'}:
+        return None, f'model conflict (Lite={lite_sig} Pro={pro_sig})'
+
+    # BUY paths
+    if lite_sig == 'BUY' and pro_sig == 'BUY':
+        return 'BUY', 'consensus (Lite+Pro)'
+    if pro_sig == 'BUY' and lite_sig == 'HOLD':
+        if best_key is None:
+            return None, 'best_strategy null/missing'
+        if best_key in _BUY_VALIDATING_KEYS_PRO:
+            return 'BUY', f'pro-only validated_by={best_key}'
+        return None, f"best_strategy={best_key} doesn't validate signal direction"
+    if lite_sig == 'BUY' and pro_sig == 'HOLD':
+        if best_key is None:
+            return None, 'best_strategy null/missing'
+        if best_key in _BUY_VALIDATING_KEYS_LITE:
+            return 'BUY', f'lite-only validated_by={best_key}'
+        return None, f"best_strategy={best_key} doesn't validate signal direction"
+
+    # SELL paths
+    if pro_sig == 'SELL' or lite_sig == 'SELL':
+        if best_key in _SELL_GATE_KEYS:
+            return None, f'SELL gate active (best_strategy={best_key})'
+        if best_key == 'pro_full' and pro_sig == 'SELL':
+            return 'SELL', 'pro-full-signal'
+        if best_key == 'lite_full' and lite_sig == 'SELL':
+            return 'SELL', 'lite-full-signal'
+        if best_key is None:
+            return None, 'best_strategy null/missing'
+        return None, f"best_strategy={best_key} doesn't validate signal direction"
+
+    return None, 'no model signals'
+
+
 def _send_signal_alerts(report):
-    """After a dual report completes, email any HIGH-confidence BUY or SELL signals."""
+    """After a dual report completes, email any backtest-validated BUY or SELL signals."""
     if not SMTP_ENABLED:
         return
     if not report or 'data' not in report:
         return
 
-    # Filter: both models agree on BUY or SELL (confidence == HIGH)
-    alerts = [
-        r for r in report['data']
-        if r.get('confidence') == 'HIGH' and r.get('consensus_signal') in ('BUY', 'SELL')
-    ]
-    if not alerts:
-        print("[Alert] No high-confidence signals today — no email sent.")
-        return
+    rows = report['data'] or []
+    best_map = _get_best_strategy_map()
 
-    # Check early if we'll have anything to send (sells get filtered later)
-    raw_buys = [a for a in alerts if a['consensus_signal'] == 'BUY']
-    raw_sells = [a for a in alerts if a['consensus_signal'] == 'SELL']
-    if not raw_buys and not raw_sells:
-        print("[Alert] No high-confidence signals today — no email sent.")
+    buys, sells = [], []
+    for r in rows:
+        sym = r.get('symbol', '?')
+        lite_sig, pro_sig = _row_signals(r)
+        bs = best_map.get(sym)
+        best_key = bs.get('key') if bs else None
+        verdict, reason = _classify_alert(lite_sig, pro_sig, best_key)
+        if verdict == 'BUY':
+            print(f"[Alert] {sym} BUY: path={reason}")
+            buys.append(r)
+        elif verdict == 'SELL':
+            print(f"[Alert] {sym} SELL: path={reason}")
+            sells.append(r)
+        else:
+            print(f"[Alert] {sym} suppressed: {reason}")
+
+    if not buys and not sells:
+        print("[Alert] No backtest-validated signals today — no email sent.")
         return
 
     # Build email body
     date_str = datetime.now().strftime('%B %d, %Y')
-    buys  = [a for a in alerts if a['consensus_signal'] == 'BUY']
-
-    # Look up best strategies from backtest library
-    best_map = _get_best_strategy_map()
-
-    # SELL: only include tickers whose best strategy is Full Signal
-    # (Buy-Only and Buy & Hold strategies don't use SELL signals)
-    _full_keys = ('lite_full', 'pro_full')
-    sells = [
-        a for a in alerts
-        if a['consensus_signal'] == 'SELL'
-        and best_map.get(a['symbol'], {}).get('key') in _full_keys
-    ]
 
     def _best_str(sym):
         b = best_map.get(sym)
@@ -183,12 +248,6 @@ def _send_signal_alerts(report):
                          f"{'  Best: ' + bs if bs else ''}"
                          f"{'  SVR: ' + sv if sv else ''}")
         lines.append("")
-    # If all sells were filtered and no buys, skip sending
-    if not buys and not sells:
-        filtered = len(raw_sells)
-        print(f"[Alert] {filtered} SELL signal(s) filtered (best strategy not Full Signal) — no email sent.")
-        return
-
     lines.append(f"Total scanned: {report['summary']['total_symbols']} symbols")
     lines.append(f"Market sentiment: {report['summary'].get('market_sentiment', 'N/A')}")
     lines.append("")
@@ -223,7 +282,7 @@ def _send_signal_alerts(report):
       </h2>
       <p style="color:#475569;font-size:14px">
         <strong>{len(buys)}</strong> BUY and <strong>{len(sells)}</strong> SELL
-        high-confidence signals (both Lite + Pro models agree).
+        high-conviction signals.
       </p>
       <table style="border-collapse:collapse;width:100%;font-size:14px;margin:16px 0">
         <tr style="background:#f1f5f9;font-weight:600;font-size:12px;text-transform:uppercase;color:#64748b">
@@ -397,6 +456,17 @@ async def lifespan(app: FastAPI):
     _ensure_cache_dir(CACHE_DIR)
     _start_scheduler()
     _load_latest_scan_from_disk()
+    # Round 8b: surface backtest-library coverage so the alert engine's
+    # validation step is observable. Single-model BUY/SELL paths require a
+    # populated best_strategy entry — coverage gaps explain "expected fire,
+    # nothing happened" cases without needing to grep the per-ticker logs.
+    try:
+        n_strats = len(_get_best_strategy_map())
+        n_total = len(get_all_symbols())
+        pct = (n_strats * 100 // n_total) if n_total else 0
+        print(f"[Scheduler] best_strategy_map populated: {n_strats} of {n_total} tickers ({pct}%)")
+    except Exception as exc:
+        print(f"[Scheduler] best_strategy_map probe failed: {exc}")
     # Bucket 2: warn once if screener_results.csv predates the tests_json /
     # dealbreakers_json columns. Non-fatal — verdict_provider handles the
     # missing columns by rendering dashes in the test-dot row / flag chips.
