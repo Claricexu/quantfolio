@@ -754,10 +754,18 @@ const LEADER_UNIVERSE_SIZE = 1414;
 const BUY_VALIDATING_KEYS_PRO  = new Set(['pro_buyonly', 'pro_full']);
 const BUY_VALIDATING_KEYS_LITE = new Set(['lite_buyonly', 'lite_full']);
 const SELL_GATE_KEYS           = new Set(['buyhold', 'lite_buyonly', 'pro_buyonly']);
-// C-2 copy — exact string approved by reviewers; keep the "i" tooltip + pill.
-const DOWNGRADE_TOOLTIP =
+// Round 8b follow-up: SELL-specific copy retained for the original SELL
+// hard-gate case ("best strategy never sells" — Buy & Hold / Buy-Only).
+const DOWNGRADE_SELL_TOOLTIP =
   "This stock's best-performing strategy never sells — holding through "
   + "downturns beat timing exits in backtests. SELL signal hidden.";
+// Generic copy for any non-qualifying signal (BUY or SELL where the
+// backtest-validated alert predicate didn't fire — single-model BUY whose
+// best strategy is on the OTHER model side, single-model SELL where the
+// best is null/non-validating, etc.).
+const DOWNGRADE_NONQUAL_TOOLTIP =
+  "Signal hidden — best backtested strategy doesn't validate this "
+  + "signal direction. The email-alert rule didn't fire for this row.";
 
 // Round 8b: dashboard / email rule-alignment. Mirrors
 // api_server.py::_classify_alert. Returns 'BUY' | 'SELL' | null. The high-
@@ -1606,11 +1614,23 @@ function pollReport(statusEl) {
 // ─── Dashboard / email rule-alignment ────────────────────────────────────
 // Round 8b: the email path (_send_signal_alerts in api_server.py) decides
 // fire/suppress via _classify_alert (mirrored in classifyAlertRow above).
-// Rows that DISPLAY as SELL but the email path would NOT alert on (best
-// strategy in the SELL hard gate, or null/non-validating, or not the
-// matching full-signal model) get downgraded to HOLD here and flagged
-// with `_sell_downgraded = true` so buildReportRow renders the "(i)"
-// pill with DOWNGRADE_TOOLTIP next to the HOLD.
+// Rows whose backend consensus_signal is BUY or SELL but the email path
+// would NOT alert on get downgraded to HOLD here and flagged with
+// `_sell_downgraded` or `_buy_downgraded` so buildReportRow renders the
+// "(i)" pill with the matching tooltip copy.
+//
+// SELL downgrades fire on:
+//   - hard-gate strategies (best ∈ {buyhold, lite_buyonly, pro_buyonly})
+//   - best=null / non-validating strategies
+//   - mismatched full-signal model (e.g. best=lite_full but only Pro=SELL)
+// BUY downgrades fire on:
+//   - single-model BUY whose best strategy is on the OTHER model side
+//     (e.g. Lite=BUY, Pro=HOLD, best=pro_full → not validated)
+//   - single-model BUY with best=null/non-validating
+//   - conflict cases never reach here (consensus_signal is HOLD when
+//     models disagree BUY-vs-SELL).
+// Consensus BUY/SELL (both models agree) never downgrade — classifyAlertRow
+// always qualifies them.
 //
 // IMPORTANT: this happens BEFORE the summary-card counts are computed —
 // that's why summary.consensus_sell / consensus_hold are RECOMPUTED below
@@ -1618,23 +1638,32 @@ function pollReport(statusEl) {
 // server's summary object. If a future reader "fixes" the card totals
 // back to the server counts, the cards will disagree with the visible
 // tables (e.g. "3 Consensus SELL" with zero SELL rows). Don't do that.
-function downgradeSells(rows, bestMap) {
-  if (!Array.isArray(rows)) return { processed: [], downgraded: 0 };
-  let downgraded = 0;
+function downgradeNonQualifying(rows, bestMap) {
+  if (!Array.isArray(rows)) return { processed: [], sellDowngraded: 0, buyDowngraded: 0 };
+  let sellDowngraded = 0;
+  let buyDowngraded = 0;
   const processed = rows.map(r => {
-    if (r && r.consensus_signal === 'SELL') {
-      if (classifyAlertRow(r, bestMap) !== 'SELL') {
-        downgraded++;
-        return Object.assign({}, r, {
-          consensus_signal: 'HOLD',
-          _sell_downgraded: true,
-          _original_signal: 'SELL',
-        });
-      }
+    if (!r) return r;
+    const cs = r.consensus_signal;
+    if (cs === 'SELL' && classifyAlertRow(r, bestMap) !== 'SELL') {
+      sellDowngraded++;
+      return Object.assign({}, r, {
+        consensus_signal: 'HOLD',
+        _sell_downgraded: true,
+        _original_signal: 'SELL',
+      });
+    }
+    if (cs === 'BUY' && classifyAlertRow(r, bestMap) !== 'BUY') {
+      buyDowngraded++;
+      return Object.assign({}, r, {
+        consensus_signal: 'HOLD',
+        _buy_downgraded: true,
+        _original_signal: 'BUY',
+      });
     }
     return r;
   });
-  return { processed, downgraded };
+  return { processed, sellDowngraded, buyDowngraded };
 }
 
 function renderReport(json) {
@@ -1651,12 +1680,14 @@ function renderReport(json) {
   // independent of signal -- a row is in the report iff it was scanned.
   _setDailyReportSymbols(rawData);
 
-  // C-2: downgrade SELL rows whose best strategy is NOT Full Signal before
-  // any rendering. `data` from here on is the post-filter view that users see.
-  const dg = downgradeSells(rawData, _bestStratMap);
+  // Round 8b: downgrade BUY/SELL rows that the email-alert predicate
+  // wouldn't fire on. `data` from here on is the post-filter view users see —
+  // both the All Symbols Consensus column and the recomputed summary cards
+  // read from this array.
+  const dg = downgradeNonQualifying(rawData, _bestStratMap);
   const data = dg.processed;
-  // Wright's QA hook: surface the downgrade count in devtools.
-  console.debug('[C-2] ' + dg.downgraded + ' SELL row(s) downgraded to HOLD (best strategy != lite_full/pro_full)');
+  console.debug('[Round 8b] ' + dg.sellDowngraded + ' SELL + ' + dg.buyDowngraded
+    + ' BUY row(s) downgraded to HOLD (alert predicate did not qualify them)');
 
   // Status bar — C-12 resilience: guard against unparseable timestamps so
   // the banner never shows "Invalid Date"; give the user an actionable
@@ -1665,7 +1696,7 @@ function renderReport(json) {
 
   // Summary cards — C-2: recompute counts from the POST-downgrade array so
   // card totals always equal what is visible in the tables below. See the
-  // long-form comment above `downgradeSells` for why we intentionally do
+  // long-form comment above `downgradeNonQualifying` for why we intentionally do
   // NOT trust summary.consensus_sell / consensus_hold here.
   const recomputedBuy  = data.filter(r => r.consensus_signal === 'BUY').length;
   const recomputedSell = data.filter(r => r.consensus_signal === 'SELL').length;
@@ -1824,7 +1855,20 @@ function buildReportRow(r) {
     <td>${v2.signal ? signalHTML(v2.signal) : '\u2014'}</td>
     <td>${v3pct != null ? pctHTML(v3pct) : '\u2014'}</td>
     <td>${v3.signal ? signalHTML(v3.signal) : '\u2014'}</td>
-    <td>${signalHTML(r.consensus_signal)}${r._sell_downgraded ? `<span class="downgrade-info" title="${DOWNGRADE_TOOLTIP}" aria-label="${DOWNGRADE_TOOLTIP}" tabindex="0">i</span>` : ''}</td>
+    <td>${signalHTML(r.consensus_signal)}${(() => {
+      if (r._sell_downgraded) {
+        // Reserve the SELL-specific copy for the hard-gate case where the
+        // best strategy never sells. Other SELL suppressions (mismatched
+        // full-signal model, null best) get the generic copy.
+        const sellHardGate = SELL_GATE_KEYS.has(((_bestStratMap[r.symbol] || {}).key));
+        const tip = sellHardGate ? DOWNGRADE_SELL_TOOLTIP : DOWNGRADE_NONQUAL_TOOLTIP;
+        return `<span class="downgrade-info" title="${tip}" aria-label="${tip}" tabindex="0">i</span>`;
+      }
+      if (r._buy_downgraded) {
+        return `<span class="downgrade-info" title="${DOWNGRADE_NONQUAL_TOOLTIP}" aria-label="${DOWNGRADE_NONQUAL_TOOLTIP}" tabindex="0">i</span>`;
+      }
+      return '';
+    })()}</td>
     <td><span class="conf-${r.confidence}" style="font-size:11px;font-weight:700;font-family:var(--mono)">${r.confidence}</span></td>
     <td style="font-size:10px;color:${bsColor};font-weight:600">${bsLabel}</td>
     <td class="mono" style="font-weight:700;color:${vColor}">${gfScore != null ? gfScore : '\u2014'}</td>
