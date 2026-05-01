@@ -254,7 +254,7 @@ def _send_signal_alerts(report):
                          f"Lite: {v2c:+.2f}%  Pro: {v3c:+.2f}%"
                          f"{'  Best: ' + bs if bs else ''}"
                          f"{'  SVR: ' + sv if sv else ''}"
-                         f"  Peer SVR: {psv if psv else '—'}")
+                         f"{'  Peer SVR: ' + psv if psv else ''}")
         lines.append("")
     if sells:
         lines.append(f"SELL SIGNALS ({len(sells)}):")
@@ -269,7 +269,7 @@ def _send_signal_alerts(report):
                          f"Lite: {v2c:+.2f}%  Pro: {v3c:+.2f}%"
                          f"{'  Best: ' + bs if bs else ''}"
                          f"{'  SVR: ' + sv if sv else ''}"
-                         f"  Peer SVR: {psv if psv else '—'}")
+                         f"{'  Peer SVR: ' + psv if psv else ''}")
         lines.append("")
     lines.append(f"Total scanned: {report['summary']['total_symbols']} symbols")
     lines.append(f"Market sentiment: {report['summary'].get('market_sentiment', 'N/A')}")
@@ -318,7 +318,7 @@ def _send_signal_alerts(report):
           <th style="padding:8px 12px;text-align:left">Pro</th>
           <th style="padding:8px 12px;text-align:left">Best Strategy</th>
           <th style="padding:8px 12px;text-align:left">SVR</th>
-          <th style="padding:8px 12px;text-align:left">Peer Median SVR</th>
+          <th style="padding:8px 12px;text-align:left">Peer SVR</th>
         </tr>
         {rows_html}
       </table>
