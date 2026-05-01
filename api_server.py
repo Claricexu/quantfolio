@@ -212,6 +212,18 @@ def _send_signal_alerts(report):
     # Build email body
     date_str = datetime.now().strftime('%B %d, %Y')
 
+    # Round 8b: peer median SVR per row, sourced from the screener CSV via
+    # verdict_provider. Already float-coerced; None for ETFs / tickers
+    # without an industry_group bucket. Loaded once outside the row loop —
+    # load_screener_index is mtime-cached but we still avoid the per-row
+    # function call in the email-rendering hot path.
+    screener_idx = {}
+    if HAS_SCREENER:
+        try:
+            screener_idx = _verdict_provider.load_screener_index()
+        except Exception as exc:
+            print(f"[Alert] Peer median SVR lookup unavailable: {exc}")
+
     def _best_str(sym):
         b = best_map.get(sym)
         return b['name'] if b else ''
@@ -219,6 +231,13 @@ def _send_signal_alerts(report):
     def _svr_str(a):
         svr = a.get('svr')
         return f"{svr:.1f}x" if svr is not None else ''
+
+    def _peer_svr_str(sym):
+        row = screener_idx.get(sym)
+        if not row:
+            return ''
+        psvr = row.get('peer_median_svr')
+        return f"{psvr:.1f}x" if psvr is not None else ''
 
     # Plain text version
     lines = [f"Quantfolio Signal Brief — {date_str}", "=" * 50, ""]
@@ -230,10 +249,12 @@ def _send_signal_alerts(report):
             v3c = a['v3']['pct_change'] if a.get('v3') else 0
             bs = _best_str(a['symbol'])
             sv = _svr_str(a)
+            psv = _peer_svr_str(a['symbol'])
             lines.append(f"  {a['symbol']:<6}  Price: ${a['current_price']:<10}  "
                          f"Lite: {v2c:+.2f}%  Pro: {v3c:+.2f}%"
                          f"{'  Best: ' + bs if bs else ''}"
-                         f"{'  SVR: ' + sv if sv else ''}")
+                         f"{'  SVR: ' + sv if sv else ''}"
+                         f"  Peer SVR: {psv if psv else '—'}")
         lines.append("")
     if sells:
         lines.append(f"SELL SIGNALS ({len(sells)}):")
@@ -243,10 +264,12 @@ def _send_signal_alerts(report):
             v3c = a['v3']['pct_change'] if a.get('v3') else 0
             bs = _best_str(a['symbol'])
             sv = _svr_str(a)
+            psv = _peer_svr_str(a['symbol'])
             lines.append(f"  {a['symbol']:<6}  Price: ${a['current_price']:<10}  "
                          f"Lite: {v2c:+.2f}%  Pro: {v3c:+.2f}%"
                          f"{'  Best: ' + bs if bs else ''}"
-                         f"{'  SVR: ' + sv if sv else ''}")
+                         f"{'  SVR: ' + sv if sv else ''}"
+                         f"  Peer SVR: {psv if psv else '—'}")
         lines.append("")
     lines.append(f"Total scanned: {report['summary']['total_symbols']} symbols")
     lines.append(f"Market sentiment: {report['summary'].get('market_sentiment', 'N/A')}")
@@ -260,6 +283,7 @@ def _send_signal_alerts(report):
         v3c = a['v3']['pct_change'] if a.get('v3') else 0
         bs = _best_str(a['symbol'])
         sv = _svr_str(a)
+        psv = _peer_svr_str(a['symbol'])
         return (f'<tr><td style="padding:6px 12px;font-weight:700">{a["symbol"]}</td>'
                 f'<td style="padding:6px 12px">${a["current_price"]}</td>'
                 f'<td style="padding:6px 12px;color:{color};font-weight:700">'
@@ -267,7 +291,8 @@ def _send_signal_alerts(report):
                 f'<td style="padding:6px 12px">{v2c:+.2f}%</td>'
                 f'<td style="padding:6px 12px">{v3c:+.2f}%</td>'
                 f'<td style="padding:6px 12px;font-size:12px">{bs or "—"}</td>'
-                f'<td style="padding:6px 12px;font-size:12px">{sv or "—"}</td></tr>')
+                f'<td style="padding:6px 12px;font-size:12px">{sv or "—"}</td>'
+                f'<td style="padding:6px 12px;font-size:12px">{psv or "—"}</td></tr>')
 
     rows_html = ""
     for a in buys:
@@ -293,6 +318,7 @@ def _send_signal_alerts(report):
           <th style="padding:8px 12px;text-align:left">Pro</th>
           <th style="padding:8px 12px;text-align:left">Best Strategy</th>
           <th style="padding:8px 12px;text-align:left">SVR</th>
+          <th style="padding:8px 12px;text-align:left">Peer Median SVR</th>
         </tr>
         {rows_html}
       </table>
