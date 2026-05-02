@@ -24,6 +24,7 @@ from tests.unit import (
     test_classifier,
     test_peer_median,
     test_signal_alerts,
+    test_alerts_send_manual,
 )
 
 
@@ -41,6 +42,7 @@ def main() -> int:
         ("test_classifier", test_classifier),
         ("test_peer_median", test_peer_median),
         ("test_signal_alerts", test_signal_alerts),
+        ("test_alerts_send_manual", test_alerts_send_manual),
     ):
         print(f"\n=== {name} ===")
         fails = mod.run_all()

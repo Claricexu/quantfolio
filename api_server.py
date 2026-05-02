@@ -179,16 +179,23 @@ def _classify_alert(lite_sig, pro_sig, best_key):
     return None, 'no model signals'
 
 
-def _send_signal_alerts(report):
-    """After a dual report completes, email any backtest-validated BUY or SELL signals."""
-    if not SMTP_ENABLED:
-        return
-    if not report or 'data' not in report:
-        return
+def _classify_report_alerts(report, *, log_prefix="[Alert]"):
+    """Run the alert classifier over every row in a daily report.
 
+    Returns ``(buys, sells)`` lists of report rows that qualify under
+    ``_classify_alert``. ``log_prefix`` lets callers distinguish scheduled
+    vs manual triggers in the log stream — the per-row "BUY path=...",
+    "SELL path=...", and "suppressed:" lines all carry the same prefix.
+
+    Pure over the report payload + the best-strategy lookup; safe to call
+    from both the scheduled hot path and the manual-trigger HTTP handler.
+    Per PATTERNS.md P-4 there is exactly ONE rule path — both callers
+    flow through ``_classify_alert`` here, never a parallel implementation.
+    """
+    if not report or 'data' not in report:
+        return [], []
     rows = report['data'] or []
     best_map = _get_best_strategy_map()
-
     buys, sells = [], []
     for r in rows:
         sym = r.get('symbol', '?')
@@ -197,20 +204,24 @@ def _send_signal_alerts(report):
         best_key = bs.get('key') if bs else None
         verdict, reason = _classify_alert(lite_sig, pro_sig, best_key)
         if verdict == 'BUY':
-            print(f"[Alert] {sym} BUY: path={reason}")
+            print(f"{log_prefix} {sym} BUY: path={reason}")
             buys.append(r)
         elif verdict == 'SELL':
-            print(f"[Alert] {sym} SELL: path={reason}")
+            print(f"{log_prefix} {sym} SELL: path={reason}")
             sells.append(r)
         else:
-            print(f"[Alert] {sym} suppressed: {reason}")
+            print(f"{log_prefix} {sym} suppressed: {reason}")
+    return buys, sells
 
-    if not buys and not sells:
-        print("[Alert] No backtest-validated signals today — no email sent.")
-        return
 
-    # Build email body
+def _render_alert_email(buys, sells, report):
+    """Build (subject, text_body, html_body) for the signal-brief email.
+
+    Same rendering both the scheduled and manual paths use — keeps the
+    HTML/plain-text parity invariant from Round 8b in one place.
+    """
     date_str = datetime.now().strftime('%B %d, %Y')
+    best_map = _get_best_strategy_map()
 
     # Round 8b: peer median SVR per row, sourced from the screener CSV via
     # verdict_provider. Already float-coerced; None for ETFs / tickers
@@ -329,20 +340,45 @@ def _send_signal_alerts(report):
       </p>
     </div>"""
 
-    # Send
     subject = f"{ALERT_SUBJECT} — {len(buys)} BUY, {len(sells)} SELL ({date_str})"
-    try:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"]    = SMTP_USER
-        msg["To"]      = ", ".join(ALERT_TO)
-        msg.attach(MIMEText(text_body, "plain"))
-        msg.attach(MIMEText(html_body, "html"))
+    return subject, text_body, html_body
 
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.sendmail(SMTP_USER, ALERT_TO, msg.as_string())
+
+def _send_alert_email(subject, text_body, html_body):
+    """Send the rendered email via SMTP. Raises RuntimeError on bad config
+    (no recipients) and propagates ``smtplib`` / ``OSError`` exceptions on
+    transport failure so callers can surface a structured error to the UI.
+    """
+    if not ALERT_TO:
+        raise RuntimeError("no recipients configured")
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"]    = SMTP_USER
+    msg["To"]      = ", ".join(ALERT_TO)
+    msg.attach(MIMEText(text_body, "plain"))
+    msg.attach(MIMEText(html_body, "html"))
+    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        server.sendmail(SMTP_USER, ALERT_TO, msg.as_string())
+
+
+def _send_signal_alerts(report):
+    """After a dual report completes, email any backtest-validated BUY or
+    SELL signals. Scheduled-trigger wrapper — never raises (legacy contract:
+    a transport failure must not crash the daily-scan thread). The manual-
+    trigger HTTP handler uses the same classifier + renderer + sender but
+    surfaces errors to the caller.
+    """
+    if not SMTP_ENABLED:
+        return
+    buys, sells = _classify_report_alerts(report, log_prefix="[Alert]")
+    if not buys and not sells:
+        print("[Alert] No backtest-validated signals today — no email sent.")
+        return
+    subject, text_body, html_body = _render_alert_email(buys, sells, report)
+    try:
+        _send_alert_email(subject, text_body, html_body)
         print(f"[Alert] Email sent to {', '.join(ALERT_TO)} — {len(buys)} BUY, {len(sells)} SELL.")
     except Exception as e:
         print(f"[Alert] Email failed: {e}")
@@ -869,6 +905,89 @@ def _load_latest_report_from_disk():
             print(f"[Startup] Loaded dual report from {report_files[-1]}")
     except Exception as exc:
         print(f"[Startup] No cached dual report: {exc}")
+
+
+@app.post("/api/alerts/send-manual")
+async def api_alerts_send_manual():
+    """Round 8c: re-send the signal-brief email from the current on-disk
+    report. Does NOT regenerate the report — purely uses the cached payload
+    (which was either freshly produced by the 4:05 PM EST scheduled run or
+    loaded from disk on startup).
+
+    Reuses ``_classify_report_alerts`` + ``_render_alert_email`` +
+    ``_send_alert_email`` so the manual path goes through the SAME rule and
+    rendering code as the scheduled trigger (PATTERNS.md P-4 — one rule
+    path, no parallel implementation).
+
+    Returns ``{success, recipients_sent, alert_count: {buy, sell}, error?}``.
+    """
+    # Lazy-load from disk if cold start hasn't populated the cache yet —
+    # mirrors the GET /api/report fallback so a fresh server can still send
+    # an alert as long as a prior dual_report_*.json exists on disk.
+    if _report_cache["data"] is None:
+        _load_latest_report_from_disk()
+    with _report_lock:
+        report = _report_cache["data"]
+
+    if not report:
+        msg = "No daily report available — generate one first"
+        print(f"[Alert] Manual trigger: {msg}")
+        return JSONResponse(
+            {"success": False, "error": msg,
+             "recipients_sent": 0, "alert_count": {"buy": 0, "sell": 0}},
+            status_code=400,
+        )
+    if not ALERT_TO:
+        msg = "no recipients configured"
+        print(f"[Alert] Manual trigger: send failed: {msg}")
+        return JSONResponse(
+            {"success": False, "error": msg,
+             "recipients_sent": 0, "alert_count": {"buy": 0, "sell": 0}},
+            status_code=400,
+        )
+
+    try:
+        buys, sells = _classify_report_alerts(report, log_prefix="[Alert] Manual trigger:")
+        print(f"[Alert] Manual trigger: classifier ran, {len(buys)} BUY / {len(sells)} SELL signals")
+    except Exception as exc:
+        print(f"[Alert] Manual trigger: classifier failed: {exc}")
+        return JSONResponse(
+            {"success": False, "error": f"classifier failed: {exc}",
+             "recipients_sent": 0, "alert_count": {"buy": 0, "sell": 0}},
+            status_code=500,
+        )
+
+    try:
+        subject, text_body, html_body = _render_alert_email(buys, sells, report)
+        _send_alert_email(subject, text_body, html_body)
+    except Exception as exc:
+        print(f"[Alert] Manual trigger: send failed: {exc}")
+        return JSONResponse(
+            {"success": False, "error": str(exc),
+             "recipients_sent": 0,
+             "alert_count": {"buy": len(buys), "sell": len(sells)}},
+            status_code=502,
+        )
+
+    print(f"[Alert] Manual trigger: sent to {len(ALERT_TO)} recipients")
+    return JSONResponse({
+        "success": True,
+        "recipients_sent": len(ALERT_TO),
+        "alert_count": {"buy": len(buys), "sell": len(sells)},
+    })
+
+
+@app.get("/api/alerts/config")
+async def api_alerts_config():
+    """Round 8c: expose minimal recipient-count metadata for the manual-
+    trigger confirmation dialog. Does NOT leak email addresses — only the
+    count and whether SMTP is enabled. Frontend renders "Sending to N
+    recipients" without revealing who they are.
+    """
+    return JSONResponse({
+        "smtp_enabled": SMTP_ENABLED,
+        "recipients_count": len(ALERT_TO),
+    })
 
 
 @app.get("/api/movers")
