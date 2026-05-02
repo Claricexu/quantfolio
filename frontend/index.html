@@ -139,6 +139,29 @@
     background:var(--bg-card); color:var(--text-muted); font-size:12px; cursor:pointer; font-weight:600;
     transition:all 0.15s; }
   .btn-sm:hover { border-color:var(--blue); color:var(--blue-light); }
+  /* Round 8c: disabled state for .btn-sm. Mirrors .btn:disabled (which only
+     covers the larger .btn pill). Without this rule the disabled "Send Email
+     Alert" button still looked clickable on hover; #btnRefreshReport also
+     benefits when in-flight scans want to render a non-actionable state. */
+  .btn-sm:disabled { opacity:0.45; cursor:not-allowed; color:var(--text-ghost); }
+  .btn-sm:disabled:hover { border-color:var(--border); color:var(--text-ghost); }
+  /* Inline spinner that sits next to the button label while a request is in
+     flight. Reuses .spinner sizing token from the larger loader; this scoped
+     selector just shrinks it for the 8px button row. */
+  .btn-sm .btn-sm-spinner { display:inline-block; width:10px; height:10px;
+    border:2px solid currentColor; border-top-color:transparent; border-radius:50%;
+    animation:spin 0.7s linear infinite; vertical-align:-1px; margin-right:6px; }
+  /* Round 8c: ephemeral toast for "Email sent to N recipients" success. Stacks
+     bottom-right so it doesn't fight the header button row. role=status on
+     the container handles the screen-reader announcement automatically. */
+  .toast-region { position:fixed; right:20px; bottom:20px; z-index:1100;
+    display:flex; flex-direction:column; gap:10px; pointer-events:none; max-width:340px; }
+  .toast { background:var(--bg-card); border:1px solid var(--border); border-left-width:4px;
+    border-radius:8px; padding:11px 14px; font-size:13px; color:var(--text-primary);
+    box-shadow:0 8px 24px rgba(0,0,0,0.45); pointer-events:auto;
+    animation:fadeUp 0.18s ease-out; max-width:340px; }
+  .toast.success { border-left-color:var(--green-text); }
+  .toast.error   { border-left-color:var(--red-text); }
   .search-hint { font-size:11px; color:var(--text-ghost); padding-left:4px; margin-bottom:16px; }
 
   /* Chips */
@@ -557,7 +580,15 @@
         <h2 style="font-size:20px;font-weight:700;color:var(--text-primary);margin-bottom:4px">Daily Report</h2>
         <p style="font-size:12px;color:var(--text-muted)">Both Lite and Pro models run on every symbol. Consensus signals show where both models agree.</p>
       </div>
-      <button class="btn-sm" onclick="refreshReport()" id="btnRefreshReport">Generate Report</button>
+      <div style="display:flex;gap:8px;align-items:center">
+        <!-- Round 8c: manual trigger sits next to the regenerate button. Disabled
+             until a Daily Report is loaded (otherwise there's nothing to send).
+             openSendAlertModal() opens a confirmation modal showing recipient
+             count + current BUY/SELL counts before firing /api/alerts/send-manual. -->
+        <button class="btn-sm" onclick="openSendAlertModal()" id="btnSendAlert"
+                disabled title="Generate a report first">Send Email Alert</button>
+        <button class="btn-sm" onclick="refreshReport()" id="btnRefreshReport">Generate Report</button>
+      </div>
     </div>
     <div id="reportStatus" aria-live="polite"></div>
     <!-- Round 8a Phase 3: aria-live on the persistent #reportContent wrapper
@@ -723,6 +754,33 @@
     </div>
   </div>
 </div>
+
+<!-- Round 8c: Send-Email-Alert confirmation modal. Same a11y shell as
+     #rebuildModal but no token input — the action is non-destructive (just
+     sends an email from already-classified data). Body fills with recipient
+     count + current BUY/SELL counts + report timestamp on open. -->
+<div id="sendAlertModal" class="modal-overlay" role="dialog" aria-modal="true"
+     aria-labelledby="sendAlertModalTitle" aria-describedby="sendAlertModalBody" hidden>
+  <div class="modal-card">
+    <h3 id="sendAlertModalTitle">Send Email Alert</h3>
+    <div id="sendAlertModalBody" style="margin:0 0 8px;line-height:1.6">
+      <!-- filled by openSendAlertModal() -->
+    </div>
+    <div class="modal-est" id="sendAlertModalCounts">
+      <!-- filled by openSendAlertModal() with the BUY/SELL count breakdown -->
+    </div>
+    <div id="sendAlertModalError" class="modal-error" aria-live="polite"></div>
+    <div class="modal-footer">
+      <button type="button" id="sendAlertModalCancel" class="modal-btn cancel">Cancel</button>
+      <button type="button" id="sendAlertModalSend" class="modal-btn destructive">Send Now</button>
+    </div>
+  </div>
+</div>
+
+<!-- Round 8c: ephemeral toast region (success / error after manual send).
+     role=status surfaces toasts to screen readers; aria-live=polite is the
+     default for role=status so we don't double-announce. -->
+<div id="toastRegion" class="toast-region" role="status" aria-live="polite" aria-atomic="false"></div>
 
 <script>
 // =================================================================
@@ -1461,6 +1519,10 @@ function buildCompareCard(d) {
 // =================================================================
 let reportLoaded = false;
 let _bestStratMap = {};  // symbol → {key, name, sharpe} from backtest library
+// Round 8c: counts stashed by renderReport so the manual-trigger modal can
+// preview "X BUY / Y SELL would send" without re-running classifyAlertRow.
+// Also captures generated_at so the modal can show which report would be sent.
+let _lastReportSummary = { buy: 0, sell: 0, generated_at: null };
 let _screenerMap = {};   // symbol → {verdict, score, archetype, reason, reason_text}
 let _screenerComputedAt = null;  // ISO mtime of screener_results.csv (for "As of" chips)
 
@@ -1750,6 +1812,24 @@ function renderReport(json) {
                     .sort((a,b) => (b.avg_pct_change||0) - (a.avg_pct_change||0));
   const sells = data.filter(r => classifyAlertRow(r, _bestStratMap) === 'SELL')
                     .sort((a,b) => (a.avg_pct_change||0) - (b.avg_pct_change||0));
+
+  // Round 8c: stash the email-fire counts + report timestamp so the
+  // manual-trigger confirmation modal can preview "would send X BUY / Y SELL"
+  // without re-running classifyAlertRow on every modal open. Same predicate
+  // (classifyAlertRow → mirrors api_server._classify_alert) so the preview
+  // matches what the backend will actually send.
+  _lastReportSummary = {
+    buy: buys.length,
+    sell: sells.length,
+    generated_at: json.generated_at || null,
+  };
+  // Re-enable the "Send Email Alert" button now that a report is loaded.
+  // Tooltip swap mirrors the disabled-state copy from the markup.
+  const sendBtn = document.getElementById('btnSendAlert');
+  if (sendBtn) {
+    sendBtn.disabled = false;
+    sendBtn.title = `Send a fresh email to all configured recipients (${buys.length} BUY / ${sells.length} SELL)`;
+  }
 
   let highConfHTML = '';
   if (buys.length > 0) {
@@ -3801,6 +3881,225 @@ function onRebuildModalSubmit() {
   errorEl.textContent = '';
   closeRebuildModal();
   startRebuildJob();
+}
+
+// ─── Round 8c: manual email-alert trigger ─────────────────────────────────
+// Confirmation modal + send flow. Re-uses .modal-overlay + .modal-card from
+// the rebuild modal. Mirrors its a11y patterns: Esc / overlay-click / Cancel
+// close, focus trap cycles Cancel → Send → Cancel, focus restores to the
+// triggering button. Spec parity comments inline.
+
+let _sendAlertModalKeyHandler = null;
+let _sendAlertModalPrevFocus = null;
+let _sendAlertRecipientsCount = null;  // populated by /api/alerts/config on first open
+let _sendAlertInFlight = false;        // double-click guard
+
+async function openSendAlertModal() {
+  // Defensive: button is disabled when no report is loaded, but keyboard /
+  // direct-call paths could still hit this — bail gracefully.
+  if (!reportLoaded) {
+    showToast('Generate a report first.', 'error');
+    return;
+  }
+  const modal   = document.getElementById('sendAlertModal');
+  const bodyEl  = document.getElementById('sendAlertModalBody');
+  const countsEl= document.getElementById('sendAlertModalCounts');
+  const errorEl = document.getElementById('sendAlertModalError');
+  const cancel  = document.getElementById('sendAlertModalCancel');
+  const sendBtn = document.getElementById('sendAlertModalSend');
+  const overlay = modal;
+  if (!modal) return;
+
+  errorEl.textContent = '';
+  // Reset send button (could be left in 'Sending…' state from a prior error).
+  sendBtn.disabled = false;
+  sendBtn.textContent = 'Send Now';
+  _sendAlertInFlight = false;
+
+  // Recipient count: cached after first call so reopening is instant. The
+  // /api/alerts/config endpoint returns {recipients_count, smtp_enabled} —
+  // no email addresses leaked, just the count.
+  if (_sendAlertRecipientsCount === null) {
+    try {
+      const res = await fetchTimeout(`${API_BASE}/api/alerts/config`, 5000);
+      if (res.ok) {
+        const cfg = await res.json();
+        _sendAlertRecipientsCount = cfg.recipients_count;
+      } else {
+        _sendAlertRecipientsCount = '?';
+      }
+    } catch (_) {
+      _sendAlertRecipientsCount = '?';
+    }
+  }
+
+  const buy  = _lastReportSummary.buy;
+  const sell = _lastReportSummary.sell;
+  const total = buy + sell;
+  const recip = _sendAlertRecipientsCount;
+  const recipLabel = (recip === 1) ? '1 recipient' : `${recip} recipients`;
+
+  // Body copy: explain what will happen + show the report being sent.
+  let when = '';
+  if (_lastReportSummary.generated_at) {
+    try {
+      when = new Date(_lastReportSummary.generated_at)
+        .toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }) + ' ET';
+    } catch (_) { when = ''; }
+  }
+  bodyEl.innerHTML = `
+    Re-send the Quantfolio Signal Brief to <strong>${escapeHTML(String(recipLabel))}</strong>
+    using the currently loaded report${when ? ` (generated ${escapeHTML(when)})` : ''}.
+    No new scan will run &mdash; the alert classifier re-evaluates the existing data and
+    sends a fresh email.
+  `;
+
+  // Counts block: BUY / SELL preview. Empty-state messaging when nothing
+  // would fire — the user can still send (the email layer will note "no
+  // backtest-validated signals today" in logs and skip the send), but we
+  // surface the empty state here so they're not surprised.
+  if (total === 0) {
+    countsEl.innerHTML = `
+      <strong>0 signals</strong> qualify under the alert classifier &mdash;
+      the email layer will skip sending. Cancel and re-generate the report if
+      you expected signals.`;
+  } else {
+    countsEl.innerHTML = `
+      <strong>${buy}</strong> BUY &middot; <strong>${sell}</strong> SELL signal${total === 1 ? '' : 's'}
+      will be included.`;
+  }
+
+  // If recipient count is 0 the backend will refuse — flag it inline so the
+  // user doesn't waste a click.
+  if (recip === 0) {
+    errorEl.textContent = 'No recipients configured. Set ALERT_TO in .env first.';
+    sendBtn.disabled = true;
+  }
+
+  _sendAlertModalPrevFocus = document.activeElement;
+  modal.hidden = false;
+  setTimeout(() => sendBtn.focus(), 0);
+
+  cancel.onclick = closeSendAlertModal;
+  sendBtn.onclick = onSendAlertModalSubmit;
+  overlay.onclick = (e) => { if (e.target === overlay) closeSendAlertModal(); };
+
+  // Esc + Tab focus trap (2 focusables).
+  _sendAlertModalKeyHandler = (e) => {
+    if (e.key === 'Escape') {
+      // Don't allow Esc-cancel mid-flight — let the request finish so the
+      // user sees success/error in the modal. Cancel button is also disabled
+      // during send.
+      if (_sendAlertInFlight) return;
+      e.preventDefault(); closeSendAlertModal(); return;
+    }
+    if (e.key === 'Tab') {
+      const focusables = [cancel, sendBtn].filter(el => !el.disabled);
+      if (focusables.length === 0) return;
+      const idx = focusables.indexOf(document.activeElement);
+      if (e.shiftKey) {
+        if (idx <= 0) { e.preventDefault(); focusables[focusables.length - 1].focus(); }
+      } else {
+        if (idx === focusables.length - 1) { e.preventDefault(); focusables[0].focus(); }
+        else if (idx === -1)               { e.preventDefault(); focusables[0].focus(); }
+      }
+    }
+  };
+  document.addEventListener('keydown', _sendAlertModalKeyHandler, true);
+}
+
+function closeSendAlertModal() {
+  const modal = document.getElementById('sendAlertModal');
+  if (!modal || modal.hidden) return;
+  if (_sendAlertInFlight) return;  // don't close mid-flight
+  modal.hidden = true;
+  if (_sendAlertModalKeyHandler) {
+    document.removeEventListener('keydown', _sendAlertModalKeyHandler, true);
+    _sendAlertModalKeyHandler = null;
+  }
+  const restore = _sendAlertModalPrevFocus && document.body.contains(_sendAlertModalPrevFocus)
+    ? _sendAlertModalPrevFocus
+    : document.getElementById('btnSendAlert');
+  _sendAlertModalPrevFocus = null;
+  if (restore && typeof restore.focus === 'function') {
+    try { restore.focus(); } catch (_) { /* noop */ }
+  }
+}
+
+async function onSendAlertModalSubmit() {
+  if (_sendAlertInFlight) return;
+  const sendBtn = document.getElementById('sendAlertModalSend');
+  const cancel  = document.getElementById('sendAlertModalCancel');
+  const errorEl = document.getElementById('sendAlertModalError');
+  const headerBtn = document.getElementById('btnSendAlert');
+
+  errorEl.textContent = '';
+  _sendAlertInFlight = true;
+  sendBtn.disabled = true;
+  cancel.disabled = true;
+  // Spinner + "Sending…" in the modal Send button. The header button also
+  // gets the same treatment so an observer outside the modal sees the
+  // in-flight state — required by the spec ("disable + loading indicator
+  // to prevent double-click").
+  sendBtn.innerHTML = '<span class="btn-sm-spinner"></span>Sending…';
+  if (headerBtn) {
+    headerBtn.disabled = true;
+    headerBtn.dataset.prevLabel = headerBtn.textContent;
+    headerBtn.innerHTML = '<span class="btn-sm-spinner"></span>Sending…';
+  }
+
+  let body = null;
+  try {
+    // 30s timeout — SMTP STARTTLS + login + send is normally <2s, but a
+    // hung TLS handshake should not pin the UI forever. Backend has its
+    // own structured error path; on timeout we surface "request timed out"
+    // and re-enable the button for retry.
+    const res = await fetchTimeout(`${API_BASE}/api/alerts/send-manual`, 30000, { method: 'POST' });
+    body = await res.json().catch(() => ({}));
+    if (res.ok && body.success) {
+      const n = body.recipients_sent || 0;
+      const ac = body.alert_count || {};
+      const detail = (ac.buy || ac.sell)
+        ? ` (${ac.buy || 0} BUY, ${ac.sell || 0} SELL)` : '';
+      showToast(`Email sent to ${n} recipient${n === 1 ? '' : 's'}${detail}.`, 'success');
+      _sendAlertInFlight = false;
+      closeSendAlertModal();
+      return;
+    }
+    // Structured error from the backend — keep modal open so user can retry.
+    const msg = (body && body.error) ? body.error : `Send failed (HTTP ${res.status}).`;
+    errorEl.textContent = msg;
+  } catch (err) {
+    errorEl.textContent = 'Network error: ' + (err && err.message ? err.message : String(err));
+  } finally {
+    _sendAlertInFlight = false;
+    sendBtn.disabled = false;
+    cancel.disabled = false;
+    sendBtn.textContent = 'Send Now';
+    if (headerBtn) {
+      headerBtn.disabled = false;
+      headerBtn.textContent = headerBtn.dataset.prevLabel || 'Send Email Alert';
+      delete headerBtn.dataset.prevLabel;
+    }
+  }
+}
+
+// ─── Round 8c: ephemeral toast helper ────────────────────────────────────
+// Bottom-right stack. Auto-dismiss after `ms` (default 4s). Click to dismiss
+// early. The toast region container is role=status, so screen readers
+// announce new toasts automatically.
+function showToast(message, kind, ms) {
+  const region = document.getElementById('toastRegion');
+  if (!region) return;
+  const toast = document.createElement('div');
+  toast.className = 'toast ' + (kind === 'error' ? 'error' : 'success');
+  toast.textContent = message;
+  toast.onclick = () => toast.remove();
+  region.appendChild(toast);
+  const ttl = (typeof ms === 'number') ? ms : 4000;
+  setTimeout(() => {
+    if (toast.parentNode) toast.parentNode.removeChild(toast);
+  }, ttl);
 }
 
 async function startRebuildJob() {
