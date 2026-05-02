@@ -25,6 +25,7 @@ from tests.unit import (
     test_peer_median,
     test_signal_alerts,
     test_alerts_send_manual,
+    test_backrefresh_scheduler,
 )
 
 
@@ -43,6 +44,7 @@ def main() -> int:
         ("test_peer_median", test_peer_median),
         ("test_signal_alerts", test_signal_alerts),
         ("test_alerts_send_manual", test_alerts_send_manual),
+        ("test_backrefresh_scheduler", test_backrefresh_scheduler),
     ):
         print(f"\n=== {name} ===")
         fails = mod.run_all()

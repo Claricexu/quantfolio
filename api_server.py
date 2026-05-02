@@ -479,9 +479,26 @@ def _start_scheduler():
             replace_existing=True,
             max_instances=1,
         )
+        # Round 8d: biweekly backtest refresh. Cron fires every Friday 9 PM ET;
+        # the wrapper applies a parity check against BACKTEST_REFRESH_REFERENCE_WEEK
+        # so only every-other-Friday actually runs. misfire_grace_time=3600
+        # tolerates short server-restart windows; max_instances=1 prevents
+        # overlap if a prior run is still processing.
+        scheduler.add_job(
+            _biweekly_backtest_refresh_job,
+            'cron',
+            day_of_week='fri',
+            hour=21, minute=0,
+            timezone='America/New_York',
+            id='biweekly_backtest_refresh',
+            replace_existing=True,
+            misfire_grace_time=3600,
+            max_instances=1,
+        )
         scheduler.start()
         print("[Scheduler] Daily Lite+Pro report → 4:05 PM EST, Mon–Fri (auto after market close).")
         print("[Scheduler] Quarterly Leader Detector rebuild → Feb/May/Aug/Nov 15 at 2 AM EST.")
+        print("[Scheduler] Biweekly backtest refresh → 9 PM ET, every other Friday.")
     except ImportError:
         print("[Scheduler] apscheduler not installed — no auto-scheduling.")
         print("  Install: pip install apscheduler")
@@ -1251,17 +1268,98 @@ _batch_state = {
     "current_symbol": None,
     "completed_symbols": [],
     "failed_symbols": [],
+    "case_b_skipped": [],
     "skipped_cached": 0,
     "started_at": None,
     "error": None,
 }
 _batch_lock = threading.Lock()
 
-BACKTEST_CACHE_TTL_DAYS = 7
+BACKTEST_CACHE_TTL_DAYS = 15
+
+# Round 8d: biweekly scheduled refresh — REFERENCE_WEEK pins the parity of
+# the every-other-Friday cadence. 2026-05-08 (ISO week 19) is the first
+# scheduled fire after this round shipped; subsequent fires land on weeks
+# 21, 23, 25, ... (current_week - REFERENCE_WEEK) % 2 == 0.
+BACKTEST_REFRESH_REFERENCE_WEEK = 19
+BACKTEST_REFRESH_STATE_FILE = os.path.join(CACHE_DIR, "last_backtest_refresh.json")
+# Insufficient-data signal string. _run_backtest_chart writes this exact
+# string to _bt_cache[sym]['error'] when both v2 and v3 return None — which
+# only happens via the BacktestEngine ValueError("insufficient data ...")
+# path at backtest_engine.py:561 → finance_model_v2.py:861-864 returning None.
+_INSUFFICIENT_DATA_ERR = "No data available for backtest"
 
 
-def _run_backtest_batch():
-    """Background: run backtests for all uncached symbols sequentially."""
+# ─── Round 8d helpers (extracted for testability — see test_backrefresh_scheduler.py) ───
+
+def _compute_parity_match(current_week: int, reference_week: int) -> bool:
+    """Return True if the current ISO week is on the biweekly cadence anchored
+    at ``reference_week``. Year-boundary safe: Python's ``%`` on negative
+    deltas still yields the right parity (e.g. (1 - 51) % 2 == 0)."""
+    return (current_week - reference_week) % 2 == 0
+
+
+def _classify_ticker_outcome(bt_cache_entry: dict) -> str:
+    """Map a `_bt_cache[sym]` entry to one of {'completed','case_b','failed'}.
+    'case_b' = insufficient-data skip (production string at
+    api_server.py line ~1127). Anything else with status='error' is 'failed'.
+    """
+    if not bt_cache_entry:
+        return 'failed'
+    status = bt_cache_entry.get('status')
+    if status == 'done':
+        return 'completed'
+    err = (bt_cache_entry.get('error') or '')
+    if _INSUFFICIENT_DATA_ERR in err or 'insufficient data' in err.lower():
+        return 'case_b'
+    return 'failed'
+
+
+def _write_refresh_state_file(state: dict, path: str) -> None:
+    """Persist a snapshot of `_batch_state` (plus trigger / completed_at /
+    case_b_skipped / case_b_history) to disk. Caller is responsible for
+    composing the dict — this just writes JSON. Wrapped in try/except by
+    callers; do not let a write failure crash the worker."""
+    with open(path, 'w') as f:
+        json.dump(state, f, indent=2, default=str)
+
+
+def _prune_orphan_cache(cache_dir: str, valid_symbols: set) -> list:
+    """Delete `backtest_chart_*.json` files in ``cache_dir`` whose ticker is
+    not in ``valid_symbols`` (Tickers.csv membership). Returns a list of
+    filenames pruned. Per-file errors are caught and logged but do not abort
+    the loop."""
+    pruned = []
+    try:
+        entries = os.listdir(cache_dir)
+    except Exception as exc:
+        print(f"[Batch] Orphan-cleanup: cannot list {cache_dir}: {exc}")
+        return pruned
+    for fname in entries:
+        if not (fname.startswith("backtest_chart_") and fname.endswith(".json")):
+            continue
+        sym = fname[len("backtest_chart_"):-len(".json")]
+        if sym in valid_symbols:
+            continue
+        full = os.path.join(cache_dir, fname)
+        try:
+            os.remove(full)
+            pruned.append(fname)
+            print(f"[Batch] Pruned orphaned cache: {fname}")
+        except Exception as exc:
+            print(f"[Batch] Failed to prune {fname}: {exc}")
+    return pruned
+
+
+def _run_backtest_batch(trigger: str = "manual"):
+    """Background: run backtests for all uncached symbols sequentially.
+
+    ``trigger`` is logged but does not change behavior — both manual button
+    and biweekly scheduler use this same worker (PATTERNS.md P-4: one worker,
+    two callers). Per-ticker outcomes route to one of three buckets via
+    ``_classify_ticker_outcome``: completed_symbols / case_b_skipped (insufficient
+    data) / failed_symbols (real errors).
+    """
     try:
         all_syms = get_all_symbols()
         to_run = []
@@ -1283,8 +1381,11 @@ def _run_backtest_batch():
             _batch_state["completed"] = 0
             _batch_state["current_symbol"] = None
             _batch_state["skipped_cached"] = len(already_cached)
+            # case_b_skipped is additive — does not break frontend polling
+            # at frontend/index.html:3174 (verified Round 8d).
+            _batch_state["case_b_skipped"] = []
 
-        print(f"\n[Batch] Starting backtest batch — {len(to_run)} symbols to run, "
+        print(f"\n[Batch] Starting (trigger: {trigger}) — {len(to_run)} tickers to run, "
               f"{len(already_cached)} already cached.")
 
         for i, sym in enumerate(to_run):
@@ -1293,18 +1394,36 @@ def _run_backtest_batch():
             try:
                 print(f"[Batch] [{i+1}/{len(to_run)}] {sym}…")
                 _run_backtest_chart(sym)
-                # _run_backtest_chart catches its own exceptions, so check result
+                # _run_backtest_chart catches its own exceptions; check
+                # _bt_cache[sym] to classify the outcome.
                 with _bt_lock:
-                    result_status = _bt_cache.get(sym, {}).get('status')
+                    entry = dict(_bt_cache.get(sym, {}))
+                outcome = _classify_ticker_outcome(entry)
                 with _batch_lock:
                     _batch_state["completed"] = i + 1
-                    if result_status == 'done':
+                    if outcome == 'completed':
                         _batch_state["completed_symbols"].append(sym)
+                    elif outcome == 'case_b':
+                        print(f"[Batch] {sym} skipped (case B): insufficient data.")
+                        _batch_state["case_b_skipped"].append(sym)
                     else:
-                        err = 'internal error'
-                        with _bt_lock:
-                            err = _bt_cache.get(sym, {}).get('error', err)
+                        err = entry.get('error', 'internal error')
                         print(f"[Batch] {sym} failed internally: {err}")
+                        _batch_state["failed_symbols"].append(sym)
+            except ValueError as ve:
+                # Defensive: _run_backtest_chart catches its own ValueErrors
+                # and writes them to _bt_cache, so we should rarely land here.
+                # If we do, classify by message content same as in-cache path.
+                msg = str(ve)
+                if _INSUFFICIENT_DATA_ERR in msg or 'insufficient data' in msg.lower():
+                    print(f"[Batch] {sym} skipped (case B, raised): {msg}")
+                    with _batch_lock:
+                        _batch_state["completed"] = i + 1
+                        _batch_state["case_b_skipped"].append(sym)
+                else:
+                    print(f"[Batch] {sym} failed (ValueError): {msg}")
+                    with _batch_lock:
+                        _batch_state["completed"] = i + 1
                         _batch_state["failed_symbols"].append(sym)
             except Exception as e:
                 print(f"[Batch] {sym} failed: {e}")
@@ -1312,10 +1431,49 @@ def _run_backtest_batch():
                     _batch_state["completed"] = i + 1
                     _batch_state["failed_symbols"].append(sym)
 
+        # ─── Post-sweep bookkeeping (state file + orphan prune + majority-failure log) ───
         with _batch_lock:
-            succeeded = len(_batch_state['completed_symbols'])
-            failed = len(_batch_state['failed_symbols'])
-        print(f"[Batch] Complete — {succeeded} succeeded, {failed} failed.\n")
+            succeeded = list(_batch_state['completed_symbols'])
+            failed = list(_batch_state['failed_symbols'])
+            case_b = list(_batch_state.get('case_b_skipped', []))
+            started_at = _batch_state.get('started_at')
+
+        elapsed = round(time.time() - started_at) if started_at else 0
+        mins, secs = elapsed // 60, elapsed % 60
+        print(f"[Batch] Complete (trigger: {trigger}) — {len(succeeded)} succeeded, "
+              f"{len(failed)} failed, {len(case_b)} case-B skipped (took {mins}m {secs}s).")
+
+        # State file (additive — case_b_history populated in commit 2)
+        try:
+            now_iso = datetime.now(ZoneInfo("America/New_York")).isoformat()
+            with _batch_lock:
+                snap = {
+                    "trigger": trigger,
+                    "completed_at": now_iso,
+                    "started_at": _batch_state.get("started_at"),
+                    "total": _batch_state.get("total", 0),
+                    "completed": _batch_state.get("completed", 0),
+                    "skipped_cached": _batch_state.get("skipped_cached", 0),
+                    "completed_symbols": list(_batch_state.get("completed_symbols", [])),
+                    "failed_symbols": list(_batch_state.get("failed_symbols", [])),
+                    "case_b_skipped": list(_batch_state.get("case_b_skipped", [])),
+                    "error": _batch_state.get("error"),
+                }
+            _write_refresh_state_file(snap, BACKTEST_REFRESH_STATE_FILE)
+        except Exception as exc:
+            print(f"[Batch] Failed to write refresh state file: {exc}")
+
+        # Orphan cache cleanup (Tickers.csv membership)
+        try:
+            valid = set(get_all_symbols())
+            _prune_orphan_cache(CACHE_DIR, valid)
+        except Exception as exc:
+            print(f"[Batch] Orphan cleanup failed: {exc}")
+
+        # Majority-failure detection (failed_symbols only; case_b excluded)
+        if len(failed) > len(succeeded):
+            print(f"[Batch] CRITICAL: majority failure ({len(failed)}/{len(failed) + len(succeeded)}) "
+                  f"— possible systemic issue")
 
     except Exception as e:
         print(f"[Batch] FATAL ERROR: {e}")
@@ -1326,6 +1484,55 @@ def _run_backtest_batch():
         with _batch_lock:
             _batch_state["is_running"] = False
             _batch_state["current_symbol"] = None
+
+
+def _biweekly_backtest_refresh_job():
+    """Cron-fired wrapper: every Friday 9 PM ET. Skips when off the biweekly
+    parity (anchored at BACKTEST_REFRESH_REFERENCE_WEEK) or when a manual
+    batch is already running. Initializes _batch_state and spawns the
+    shared worker thread with trigger='scheduled'."""
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    current_week = now_et.isocalendar().week
+
+    if not _compute_parity_match(current_week, BACKTEST_REFRESH_REFERENCE_WEEK):
+        print(f"[Batch] Skipping scheduled run — off-week parity (week {current_week}).")
+        return
+
+    with _batch_lock:
+        if _batch_state["is_running"]:
+            print("[Batch] Skipping scheduled run — manual batch already in progress.")
+            return
+        # Pre-set state under the lock so /api/backtest-batch/status reflects
+        # the scheduled run immediately (mirrors the manual-trigger init at
+        # api_backtest_batch ~line 1444).
+        all_syms = get_all_symbols()
+        cached = 0
+        for sym in all_syms:
+            path = os.path.join(CACHE_DIR, f"backtest_chart_{sym}.json")
+            if os.path.exists(path):
+                try:
+                    age = (time.time() - os.path.getmtime(path)) / 86400
+                    if age < BACKTEST_CACHE_TTL_DAYS:
+                        cached += 1
+                except Exception:
+                    pass
+        to_run = len(all_syms) - cached
+
+        _batch_state["is_running"] = True
+        _batch_state["total"] = to_run
+        _batch_state["completed"] = 0
+        _batch_state["current_symbol"] = None
+        _batch_state["completed_symbols"] = []
+        _batch_state["failed_symbols"] = []
+        _batch_state["case_b_skipped"] = []
+        _batch_state["skipped_cached"] = cached
+        _batch_state["started_at"] = time.time()
+        _batch_state["error"] = None
+
+    thread = threading.Thread(
+        target=_run_backtest_batch, kwargs={"trigger": "scheduled"}, daemon=True
+    )
+    thread.start()
 
 
 def _load_library_summary():
@@ -1448,11 +1655,14 @@ async def api_backtest_batch():
         _batch_state["current_symbol"] = None
         _batch_state["completed_symbols"] = []
         _batch_state["failed_symbols"] = []
+        _batch_state["case_b_skipped"] = []
         _batch_state["skipped_cached"] = cached
         _batch_state["started_at"] = time.time()
         _batch_state["error"] = None
 
-    thread = threading.Thread(target=_run_backtest_batch, daemon=True)
+    thread = threading.Thread(
+        target=_run_backtest_batch, kwargs={"trigger": "manual"}, daemon=True
+    )
     thread.start()
 
     return JSONResponse({
@@ -1470,6 +1680,7 @@ async def api_backtest_batch_status():
         snap = dict(_batch_state)
         snap["completed_symbols"] = list(snap["completed_symbols"])
         snap["failed_symbols"] = list(snap["failed_symbols"])
+        snap["case_b_skipped"] = list(snap.get("case_b_skipped", []))
     # Add per-symbol progress if running
     current_prog = None
     if snap["current_symbol"]:
@@ -1491,9 +1702,33 @@ async def api_backtest_batch_status():
         "current_progress": current_prog,
         "completed_symbols": snap["completed_symbols"],
         "failed_symbols": snap["failed_symbols"],
+        "case_b_skipped": snap["case_b_skipped"],
         "elapsed_seconds": elapsed,
         "error": snap.get("error"),
     })
+
+
+@app.get("/api/backtest-refresh/status")
+async def api_backtest_refresh_status():
+    """Round 8d: return the persisted state from the most recent backtest
+    refresh sweep (manual or scheduled). Reads cache/last_backtest_refresh.json.
+    Returns 404 if no run has completed since the file was introduced."""
+    if not os.path.exists(BACKTEST_REFRESH_STATE_FILE):
+        return JSONResponse({"status": "no_run_yet"}, status_code=404)
+    try:
+        with open(BACKTEST_REFRESH_STATE_FILE) as f:
+            data = json.load(f)
+        return JSONResponse(data)
+    except json.JSONDecodeError as exc:
+        return JSONResponse(
+            {"status": "error", "error": f"corrupted state file: {exc}"},
+            status_code=500,
+        )
+    except Exception as exc:
+        return JSONResponse(
+            {"status": "error", "error": str(exc)},
+            status_code=500,
+        )
 
 
 # =============================================================================
