@@ -26,6 +26,7 @@ from tests.unit import (
     test_signal_alerts,
     test_alerts_send_manual,
     test_backrefresh_scheduler,
+    test_case_b_retry,
 )
 
 
@@ -45,6 +46,7 @@ def main() -> int:
         ("test_signal_alerts", test_signal_alerts),
         ("test_alerts_send_manual", test_alerts_send_manual),
         ("test_backrefresh_scheduler", test_backrefresh_scheduler),
+        ("test_case_b_retry", test_case_b_retry),
     ):
         print(f"\n=== {name} ===")
         fails = mod.run_all()

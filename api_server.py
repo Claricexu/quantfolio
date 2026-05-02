@@ -1324,6 +1324,53 @@ def _write_refresh_state_file(state: dict, path: str) -> None:
         json.dump(state, f, indent=2, default=str)
 
 
+def _should_retry_case_b(last_skip_iso: str, now: datetime, weeks: int = 8) -> bool:
+    """Round 8d commit 2: Case B graduation cadence.
+
+    Return True if a ticker that was previously case-B skipped is due for a
+    retry — i.e. its last skip is at least ``weeks`` weeks ago (boundary
+    inclusive). Bad / missing timestamps default to True so we never
+    permanently strand a ticker on a parse error.
+    """
+    if not last_skip_iso:
+        return True
+    try:
+        last = datetime.fromisoformat(last_skip_iso)
+    except (ValueError, TypeError):
+        return True
+    # Normalize to aware. If `now` is aware and `last` is naive (or vice
+    # versa), strip tzinfo from both so subtraction is well-defined.
+    if (now.tzinfo is None) != (last.tzinfo is None):
+        now = now.replace(tzinfo=None)
+        last = last.replace(tzinfo=None)
+    delta = now - last
+    return delta.days >= weeks * 7
+
+
+def _load_refresh_state(path: str) -> dict:
+    """Load the persisted refresh state file. Migrates legacy state files
+    (commit-1 schema, no ``case_b_history`` key) to an empty dict and logs
+    once. Returns ``{}`` (empty case_b_history baseline) if the file does
+    not exist or cannot be parsed."""
+    if not os.path.exists(path):
+        return {"case_b_history": {}}
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except Exception as exc:
+        print(f"[Batch] Failed to load state file ({exc}); treating as fresh.")
+        return {"case_b_history": {}}
+    if not isinstance(data, dict):
+        return {"case_b_history": {}}
+    if "case_b_history" not in data:
+        print("[Batch] Migrating state file: case_b_history initialized empty.")
+        data["case_b_history"] = {}
+    elif not isinstance(data["case_b_history"], dict):
+        # Defensive: unexpected type → reinitialize.
+        data["case_b_history"] = {}
+    return data
+
+
 def _prune_orphan_cache(cache_dir: str, valid_symbols: set) -> list:
     """Delete `backtest_chart_*.json` files in ``cache_dir`` whose ticker is
     not in ``valid_symbols`` (Tickers.csv membership). Returns a list of
@@ -1361,9 +1408,18 @@ def _run_backtest_batch(trigger: str = "manual"):
     data) / failed_symbols (real errors).
     """
     try:
+        # Round 8d commit 2: load case_b_history for graduation cadence.
+        prior_state = _load_refresh_state(BACKTEST_REFRESH_STATE_FILE)
+        case_b_history = dict(prior_state.get("case_b_history", {}))
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+
         all_syms = get_all_symbols()
         to_run = []
         already_cached = []
+        # Tickers that were case-B last sweep and are NOT yet due for retry —
+        # they are logged as case_b_skipped this run too without invoking
+        # _run_backtest_chart. case_b_history[sym] timestamp is preserved.
+        pre_case_b_skipped = []
         for sym in all_syms:
             path = os.path.join(CACHE_DIR, f"backtest_chart_{sym}.json")
             if os.path.exists(path):
@@ -1374,6 +1430,12 @@ def _run_backtest_batch(trigger: str = "manual"):
                         continue
                 except Exception:
                     pass
+            # Case B retry-cadence guard: previously skipped + not yet due.
+            if sym in case_b_history and not _should_retry_case_b(
+                case_b_history[sym], now_et
+            ):
+                pre_case_b_skipped.append(sym)
+                continue
             to_run.append(sym)
 
         with _batch_lock:
@@ -1383,10 +1445,13 @@ def _run_backtest_batch(trigger: str = "manual"):
             _batch_state["skipped_cached"] = len(already_cached)
             # case_b_skipped is additive — does not break frontend polling
             # at frontend/index.html:3174 (verified Round 8d).
-            _batch_state["case_b_skipped"] = []
+            # Seed with retry-deferred tickers so the running-total reflects
+            # the full Case B cohort even before the loop kicks off.
+            _batch_state["case_b_skipped"] = list(pre_case_b_skipped)
 
         print(f"\n[Batch] Starting (trigger: {trigger}) — {len(to_run)} tickers to run, "
-              f"{len(already_cached)} already cached.")
+              f"{len(already_cached)} already cached, "
+              f"{len(pre_case_b_skipped)} case-B retry-deferred.")
 
         for i, sym in enumerate(to_run):
             with _batch_lock:
@@ -1402,10 +1467,18 @@ def _run_backtest_batch(trigger: str = "manual"):
                 with _batch_lock:
                     _batch_state["completed"] = i + 1
                     if outcome == 'completed':
+                        # Graduation: ticker previously in case_b_history
+                        # has now produced a real result.
+                        if sym in case_b_history:
+                            print(f"[Batch] {sym} graduated from case B (now has sufficient data).")
+                            case_b_history.pop(sym, None)
                         _batch_state["completed_symbols"].append(sym)
                     elif outcome == 'case_b':
                         print(f"[Batch] {sym} skipped (case B): insufficient data.")
                         _batch_state["case_b_skipped"].append(sym)
+                        case_b_history[sym] = datetime.now(
+                            ZoneInfo("America/New_York")
+                        ).isoformat()
                     else:
                         err = entry.get('error', 'internal error')
                         print(f"[Batch] {sym} failed internally: {err}")
@@ -1420,6 +1493,9 @@ def _run_backtest_batch(trigger: str = "manual"):
                     with _batch_lock:
                         _batch_state["completed"] = i + 1
                         _batch_state["case_b_skipped"].append(sym)
+                    case_b_history[sym] = datetime.now(
+                        ZoneInfo("America/New_York")
+                    ).isoformat()
                 else:
                     print(f"[Batch] {sym} failed (ValueError): {msg}")
                     with _batch_lock:
@@ -1443,7 +1519,14 @@ def _run_backtest_batch(trigger: str = "manual"):
         print(f"[Batch] Complete (trigger: {trigger}) — {len(succeeded)} succeeded, "
               f"{len(failed)} failed, {len(case_b)} case-B skipped (took {mins}m {secs}s).")
 
-        # State file (additive — case_b_history populated in commit 2)
+        # Drop case_b_history entries for tickers no longer in the universe
+        # (keeps the file from accumulating dead symbols indefinitely).
+        valid_universe = set(all_syms)
+        case_b_history = {
+            k: v for k, v in case_b_history.items() if k in valid_universe
+        }
+
+        # State file (now includes case_b_history for graduation cadence)
         try:
             now_iso = datetime.now(ZoneInfo("America/New_York")).isoformat()
             with _batch_lock:
@@ -1457,6 +1540,7 @@ def _run_backtest_batch(trigger: str = "manual"):
                     "completed_symbols": list(_batch_state.get("completed_symbols", [])),
                     "failed_symbols": list(_batch_state.get("failed_symbols", [])),
                     "case_b_skipped": list(_batch_state.get("case_b_skipped", [])),
+                    "case_b_history": case_b_history,
                     "error": _batch_state.get("error"),
                 }
             _write_refresh_state_file(snap, BACKTEST_REFRESH_STATE_FILE)
