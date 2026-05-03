@@ -320,8 +320,8 @@ Quantfolio runs an automated fundamentals screen over the entire SEC-registered 
 | **NAME** | Company name |
 | **SECTOR** | Canonical sector bucket (10 buckets: Technology, Healthcare, Financials, Communication Services, Consumer Discretionary, Consumer Staples, Energy, Industrials, Materials, Utilities). Derived from SIC + ticker overrides for the 9 mega-caps whose SIC codes misrepresent their actual business (GOOGL/META/NFLX → Communication Services, AAPL → Technology, AMZN → Consumer Discretionary, etc.). |
 | **MKT CAP** | Size (shown as $M / $B / $T) |
-| **VERDICT** | LEADER / GEM / WATCH / AVOID (colored badge). Shows an "as of" timestamp chip reflecting when the screener last ran. |
-| **SCORE** | Good Firm score (0–100) |
+| **VERDICT** | LEADER / WATCH / AVOID / INSUFFICIENT_DATA (colored badge). Shows an "as of" timestamp chip reflecting when the screener last ran. |
+| **SCORE** | Good Firm score (0–95; max is 95 because the bonuses cap there) |
 | **ARCHETYPE** | GROWTH or MATURE |
 | **SECTOR RANK** | Market-cap rank within the broad-sector group |
 
@@ -329,7 +329,7 @@ Click any column header to sort (▲ / ▼). Click any row in the Leader Detecto
 
 **Filter chips** above the table:
 
-- **VERDICT** — All / Leader / Gem / Watch / Avoid
+- **VERDICT** — All / Leader / Watch / Avoid
 - **ARCHETYPE** — All / Growth / Mature
 - **SECTOR** — dropdown populated from the live data
 - **INDUSTRY GROUP** — chip row beneath the controls block. AND-combines with the SECTOR filter, so SECTOR=Technology + INDUSTRY GROUP=Semiconductors narrows to semiconductor companies in the Technology sector. Picking an industry group also trims the Sector dropdown to just the sectors containing rows in that group.
@@ -342,18 +342,18 @@ Click any column header to sort (▲ / ▼). Click any row in the Leader Detecto
 
 | Verdict | Plain English |
 |---|---|
-| **LEADER** | Passes all 5 business-quality tests **and** is in the top 5 by market cap within its sector. A blue-chip in its industry. |
-| **GEM** | Passes all 5 tests but is smaller than the top 5 by market cap. A high-quality runner-up. These are the "hidden gems" — great businesses that aren't household names. |
+| **LEADER** | Passes all 5 business-quality tests with no dealbreakers. A top-tier candidate regardless of size — the table's MKT CAP and SECTOR RANK columns tell you whether it's a blue-chip household name or a smaller-cap leader. |
 | **WATCH** | Passes 3 or 4 of the 5 tests, no red flags. Worth keeping an eye on, but not yet strong enough for a position. |
 | **AVOID** | Passes 2 or fewer tests, OR has a dealbreaker flag (shrinking revenue, burning cash, heavy dilution). Skip. |
+| **INSUFFICIENT_DATA** | Not enough SEC filing history (typically < 3 years public) or a non-applicable ticker type (ETF, ADR) — the screener can't judge it. |
 
-An extra sentinel, **INSUFFICIENT_DATA**, shows up for tickers that don't have enough SEC filing history (typically < 3 years public) to evaluate.
+> **What changed in Round 9a (2026-05-03):** the previous schema had a fifth tier called `GEM` for 5/5 winners outside the top-5 sector-rank slot. That label encoded company size into a quality verdict, which got confusing — a great small-cap business and a great mega-cap business both deserve the same quality label. They're now both `LEADER`. Size context still rides on the row via the **MKT CAP** and **SECTOR RANK** columns.
 
 ### What GROWTH vs MATURE means
 
 The screener first sorts every company by **revenue growth**:
 
-- **GROWTH** — revenue up ≥ 12% year-over-year. Scored on growth rate, unit economics, path to profits, moat, and capital efficiency. Dealbreaker: burning cash badly (FCF/Revenue < -15%).
+- **GROWTH** — revenue up ≥ 12% year-over-year. Scored on growth rate, unit economics, path to profits, moat, and capital efficiency. Dealbreaker: burning cash (operating cash flow negative on a trailing-twelve-month basis).
 - **MATURE** — revenue growing slower than 12% (or declining). Scored on stability, margin quality, cash generation, moat, and not-shrinking. Dealbreakers: declining revenue (3Y CAGR < -5%) or heavy share dilution (> 5% per year).
 
 The split matters because a Coca-Cola should not be graded like a Snowflake. MATURE companies earn their LEADER badge through cash generation and durability; GROWTH companies earn theirs through pace plus a credible path to profits.
@@ -380,9 +380,9 @@ Press **Esc**, click outside the modal, or hit **Cancel** to dismiss without sta
 
 ### What the ✓ in the Selected column tells you
 
-A ✓ means this ticker made the cut into `leaders.csv` — the 100-symbol list that feeds Daily Report, Strategy Lab, and the Ticker Lookup universe along with your `Tickers.csv` watchlist. The selection rule is simple: **every LEADER makes it in**, and the remaining slots go to the highest-scoring GEMs until 100 is hit.
+A ✓ means this ticker made the cut into `leaders.csv` — the 100-symbol list that feeds Daily Report, Strategy Lab, and the Ticker Lookup universe along with your `Tickers.csv` watchlist. The selection rule is simple: **the top 100 LEADER rows by Good Firm score make it in.** If the screener produces fewer than 100 LEADERs the file under-fills rather than reaching down into WATCH (which represents 3–4/5 tests passed — a different quality tier).
 
-A row without a ✓ means the screener analyzed it but didn't pick it (either lower verdict, or a LEADER/GEM that got nudged out by higher-scoring peers when the 100-slot cap filled up).
+A row without a ✓ means the screener analyzed it but didn't pick it (either it's not a LEADER, or it's a LEADER that lost the score tiebreak when the 100-slot cap filled up).
 
 ---
 

@@ -2,7 +2,7 @@
 
 A straightforward framework for identifying industry leaders and hidden gems, distilled from Nanalyze's research methodology across 49 newsletters.
 
-> **Quantfolio integration:** this framework ships as `fundamental_screener.py` + `fundamental_metrics.py`, with **archetype-dispatched** tests (Phase 1.9, 2026-04-18). The runtime classifies each ticker as **GROWTH** or **MATURE** on a single Revenue-YoY cut, then applies a tailored 5-test rubric and per-archetype dealbreakers to emit one of four verdicts: **LEADER / GEM / WATCH / AVOID**. See the *Archetype Routing* section below for the current shape; the original Nanalyze core principles (Core Philosophy, the 5 business tests, SVR valuation, dealbreaker list) stay intact as the underlying business ideas.
+> **Quantfolio integration:** this framework ships as `fundamental_screener.py` + `fundamental_metrics.py`, with **archetype-dispatched** tests (Phase 1.9, 2026-04-18) and a size-blind verdict (Round 9a, 2026-05-03). The runtime classifies each ticker as **GROWTH** or **MATURE** on a single Revenue-YoY cut, then applies a tailored 5-test rubric and per-archetype dealbreakers to emit one of four verdicts: **LEADER / WATCH / AVOID / INSUFFICIENT_DATA**. See the *Archetype Routing* section below for the current shape; the original Nanalyze core principles (Core Philosophy, the 5 business tests, SVR valuation, dealbreaker list) stay intact as the underlying business ideas.
 
 ---
 
@@ -16,7 +16,7 @@ Ignore daily price noise. Focus on the quality of the underlying business. Holdi
 
 ## The 5 Tests of a Good Company
 
-A firm must pass **all five** tests to be considered a "good" investment candidate. Failing any one is usually a dealbreaker.
+A firm must pass **all five** tests to earn the top-tier `LEADER` verdict. Passing only 3–4 routes to `WATCH` (worth tracking but not a quality peak); passing ≤ 2 routes to `AVOID`. The five tests are quality dimensions, not independent kill-switches — a single failure isn't automatically fatal because the *aggregate* test count is what drives the verdict. The dealbreakers in the *Archetype Routing* section below are the actual hard cutoffs that bypass the test count.
 
 ### 1. Growth — Is revenue compounding fast?
 
@@ -114,10 +114,12 @@ Use **gross profit multiples** instead of revenue multiples when:
 
 ## Instant Dealbreakers (The "Avoid List")
 
+> ⚠ **Aspirational — not enforced in code.** The patterns below describe the kind of business profile a human reader should reflexively reject. The shipped screener does **not** automatically detect any of them. The two automated dealbreakers it actually enforces are listed under *Archetype Routing → MATURE / GROWTH dealbreakers* below (`cagr_shrinking`, `diluting`, `burning_cash`). Closing those gaps — SPAC-history detection, going-concern flag parsing, dilution intensity, etc. — is the subject of a separate methodology project queued ahead of the next quarterly SEC fetch (5/15).
+
 | Pattern | Example |
 |---|---|
 | SPACs, especially de-SPACed names | Avg -50% to -70% since 2009 |
-| Penny stocks / microcaps (< $100M) | Algorhythm/RIME |
+| Penny stocks / microcaps (< $100M) | Algorhythm/RIME (universe pre-screen floors at $1B, so this won't appear in shipped output) |
 | Pre-revenue tech with no product | AbCellera pivot, Wolfspeed pre-bankruptcy |
 | Shareholder dilution as a business model | Unprofitable biotechs with perpetual secondary offerings |
 | "AI" bolt-on with no real AI revenue | Companies adding "AI" to their name |
@@ -180,21 +182,33 @@ The 12% threshold was empirically locked via `diag_threshold_sensitivity.py` aga
 | 5 | `capital_efficiency` | `rule_40_score ≥ 40` | Efficient-frontier line (tightened from Path-A's ≥ 25) |
 
 **GROWTH dealbreakers** (any → AVOID):
-- `burning_cash`: `flag_burning_cash = True` (FCF < 0 AND runway < 24mo)
+- `burning_cash`: `flag_burning_cash = True`, where `flag_burning_cash = (ocf_ttm < 0)` — a single-period TTM operating cash flow check, **not** the FCF-plus-runway formulation an earlier draft of this doc described. The simple TTM check is intentional: SEC filings arrive semi-annually, so a multi-period FCF/runway calculation would lag a real cash-flow inflection by 6–12 months. The TTM check trips fast enough to actually catch a deteriorating GROWTH name before it dilutes.
 
 `flag_diluting` is deliberately **not** a GROWTH dealbreaker — SaaS stock-based-comp creep trips NOW / NFLX / PANW legitimately without indicating imminent harm. MATURE enforces capital discipline through `stability` + `diluting` dealbreaker; GROWTH shuts down only on actual cash-burn risk. `flag_spac_or_microcap` dropped entirely because Phase 1.0 already floors the universe at $1B market cap.
+
+### Good Firm Score Formula
+
+The verdict is the headline label; `good_firm_score` is the continuous tiebreaker used by `leader_selector.py` to rank LEADER rows when filling `leaders.csv`. Computed in `fundamental_screener.score_ticker`:
+
+```
+score = passes * 15                                  # 0–75 from the 5 tests
+      + 10  if known > 0 and not any_dealbreaker     # data-coverage / clean-record bonus
+      +  5  if roic_ttm  >= 0.20                     # ROIC quality bonus
+      +  5  if rule_40_score >= 40                   # Rule-40 quality bonus
+```
+
+Theoretical maximum: **95** (5 × 15 + 10 + 5 + 5). Round 9a removed an artificial `min(score, 100)` cap that was dead code — the cap was never reachable.
 
 ### Verdict Mapping (both archetypes)
 
 | Verdict | Condition |
 |---|---|
-| `LEADER` | 5/5 tests pass **AND** `market_cap_rank_in_sector ≤ 5` **AND** no dealbreaker |
-| `GEM` | 5/5 tests pass **AND** `market_cap_rank_in_sector > 5` (or rank unknown) **AND** no dealbreaker |
+| `LEADER` | 5/5 tests pass **AND** no dealbreaker |
 | `WATCH` | 3–4/5 tests pass **AND** no dealbreaker |
 | `AVOID` | ≤ 2/5 tests pass **OR** any dealbreaker |
 | `INSUFFICIENT_DATA` | archetype = UNKNOWN **OR** < 3 tests returned a non-null result (ETFs, ADRs, ingestion gaps) |
 
-The LEADER / GEM split is a **sector-rank tiebreak at 5/5**, not a quality gate: both are business-quality peaks, just at different company sizes. That's why `leader_selector.py` emits `leaders.csv` as `all LEADER ∪ top GEM by good_firm_score until the 100-row cap is hit`.
+Round 9a (2026-05-03) collapsed the prior LEADER/GEM split. Pre-9a the schema gated 5/5 winners on `market_cap_rank_in_sector ≤ 5` (LEADER) vs. `> 5` (GEM); both were the same quality tier but the verdict label encoded company size. With the split removed, verdicts encode pure quality; size context still rides on the row via `market_cap_rank_in_sector` (used by the moat-fallback test and surfaced in the Leader Detector table) but no longer steers the verdict label.
 
 ### Pre-1.9 Pseudocode (historical — retired)
 
@@ -229,7 +243,7 @@ These are tracked in the planning notes, not in the shipped rubric.
 - **`edgar_fetcher.py`** — SEC XBRL fact ingest (90-day TTL, walked across paginated `filings.files[]`). Source of every metric the rubric reads.
 - **`fundamental_metrics.py`** — computes the 15 metrics referenced above (margins, CAGR, FCF, ROIC, Rule-40, SVR, etc.).
 - **`fundamental_screener.py`** — classifier + dispatch + verdict (this doc's spec, in code).
-- **`leader_selector.py`** — translates verdicts into `leaders.csv` (all LEADER ∪ top GEM by `good_firm_score` until total = 100).
+- **`leader_selector.py`** — translates verdicts into `leaders.csv` (top-N LEADER by `good_firm_score`, target_size=100, under-fill if fewer LEADERs exist — WATCH is intentionally not eligible since it represents 3–4/5 tests passed, not a quality peak).
 
 ---
 
@@ -240,12 +254,12 @@ These are tracked in the planning notes, not in the shipped rubric.
 2. Recurring revenue, high margins
 3. Positive operating cash flow
 4. #1/#2 position or unique proprietary asset
-5. SVR ≤ 18 (lower is better)
+5. Reasonable valuation — see *Valuation* section above for SVR / gross-profit-multiple guidance (Round 7d removed SVR-vs-sector bonus from the score; SVR remains a human reading aid, not an automatic kill switch)
 
-**A real gem has all five, plus:**
+**A standout candidate has all five, plus the qualitative tells:**
 - An unloved story (market is missing something)
 - Insiders buying
 - Improving — not just high — metrics
 
-**Buy signal:** Good firm + short-term market panic drops SVR below historical average.
-**Sell signal:** SVR balloons above 18 OR any of the 5 core tests fail for 2+ quarters.
+**Buy signal:** Good firm + short-term market panic drops valuation below historical average.
+**Sell signal:** Multiple core tests slipping for 2+ quarters, or a dealbreaker triggers (e.g. shrinking 3y CAGR, dilution > 15%, OCF turns negative).

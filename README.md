@@ -28,7 +28,7 @@ index.html             <-->  api_server.py       -->    Lite model (RF + XGBoost
                                                               verdict + archetype + score
                                                               + peer_median_* x 8 + peer_count)
                              verdict_provider.py   -->   unified verdict loader for all tabs
-                             leader_selector.py    -->   leaders.csv (100 LEADER ∪ top GEM)
+                             leader_selector.py    -->   leaders.csv (top 100 LEADER by score)
 ```
 
 `backtest_engine.py` is the shared walk-forward simulator behind `predict_ticker`, `backtest_symbol`, and `backtest_multi_strategy` — one `BacktestConfig`, one config-hashed result, same numbers across the CLI, the dashboard, and the Daily Report.
@@ -38,7 +38,7 @@ index.html             <-->  api_server.py       -->    Lite model (RF + XGBoost
 - **Ticker Lookup** — Enter any ticker and get a Lite-vs-Pro prediction with consensus signal. Four-card valuation row (SVR / Market Cap / Quarterly Revenue / P/E) plus a verdict card with three-column metric grid showing the company value alongside its industry-group peer median.
 - **Daily Report** — Auto-scans approximately 150 symbols at market close. Sortable table; click any row to expand the verdict card inline. Banner aggregates per-date close prices across symbols. A manual "Send Email Alert" button re-fires the email from the cached report without re-running the scan.
 - **Strategy Lab** — Batch walk-forward backtesting across all tickers. Defaults to Daily Report symbols with an override toggle. Click any row to expand the equity-curve chart inline.
-- **Leader Detector** — Browse the prescreened SEC universe (approximately 1,400 rows) with 4-verdict tags (LEADER / GEM / WATCH / AVOID), binary archetype (GROWTH vs MATURE), sector rank, and Good Firm score. Filter by verdict, archetype, sector, or industry group. Click any row to expand the verdict card inline.
+- **Leader Detector** — Browse the prescreened SEC universe (approximately 1,400 rows) with 4-verdict tags (LEADER / WATCH / AVOID / INSUFFICIENT_DATA), binary archetype (GROWTH vs MATURE), sector rank, and Good Firm score. Filter by verdict, archetype, sector, or industry group. Click any row to expand the verdict card inline.
 - **Auto Strategy Mode** — ETFs use Full Signal (BUY+SELL), individual stocks use Buy-Only (BUY only, hold)
 - **SVR (Simple Value Ratio)** — Quick valuation check (Market Cap / Annualized Revenue), displayed in predictions and reports. Email alerts include a Peer SVR column showing the industry-group median SVR alongside each ticker's SVR.
 - **Best Strategy** — Each ticker's optimal risk-adjusted strategy (by Sharpe ratio) surfaced in lookup, report, and lab
@@ -59,10 +59,10 @@ Auto-generated at 4:05 PM EST on trading days. Three sortable tables (HIGH-CONFI
 
 ### Leader Detector
 - **Universe Viewer** — Sortable table of all prescreened symbols (approximately 1,400). Columns: Symbol, Name, Sector, Market Cap, Verdict, Good Firm Score, Archetype, Sector Rank, Selected (✓ if in `leaders.csv`). Click any row to expand the verdict card inline beneath that row.
-- **Filter Chips** — VERDICT (All / Leader / Gem / Watch / Avoid), ARCHETYPE (All / Growth / Mature), a SECTOR dropdown, and an INDUSTRY GROUP chip row that AND-combines with sector. All four filter families cross-narrow: picking Industry Group=Semiconductors trims the Sector dropdown; picking Sector=Technology trims the Industry Group chip pool.
+- **Filter Chips** — VERDICT (All / Leader / Watch / Avoid), ARCHETYPE (All / Growth / Mature), a SECTOR dropdown, and an INDUSTRY GROUP chip row that AND-combines with sector. All four filter families cross-narrow: picking Industry Group=Semiconductors trims the Sector dropdown; picking Sector=Technology trims the Industry Group chip pool.
 - **Rebuild Now** — Kicks off the Layer 1 pipeline (`universe_builder.py` → `edgar_fetcher.py` → `fundamental_screener.py` → `leader_selector.py`). Warm rebuild ≈ 10 min; cold rebuild ≈ 3.5 hr (SEC EDGAR rate-limits at 10 req/sec).
 - **Download CSV** — Export the currently filtered view for offline analysis.
-- **Verdict Semantics** — `LEADER` = 5/5 archetype tests + top-5 market-cap rank in sector + no dealbreaker. `GEM` = 5/5 + outside top-5 rank. `WATCH` = 3–4/5. `AVOID` = ≤2/5 or any dealbreaker.
+- **Verdict Semantics** — `LEADER` = 5/5 archetype tests + no dealbreaker (size-blind; sector rank is surfaced in the table but no longer steers the verdict — Round 9a). `WATCH` = 3–4/5. `AVOID` = ≤2/5 or any dealbreaker. `INSUFFICIENT_DATA` = archetype unknown or fewer than 3 tests had data.
 
 ## Models
 
@@ -139,14 +139,13 @@ Threshold locked via `diag_threshold_sensitivity.py` — stable across 10/12/15/
 | Archetype | Tests | Dealbreakers |
 |---|---|---|
 | **MATURE** | not_declining (Revenue 3Y CAGR ≥ 0%), margin_quality (Operating Margin ≥ 5%), cash_generation (FCF/Revenue ≥ 5%), moat (ROIC ≥ 10%), stability (Revenue CAGR stdev < 15%) | cagr_shrinking (3Y CAGR < −5%), diluting (shares_out 3Y CAGR > 5%) |
-| **GROWTH** | growth_rate (Revenue YoY ≥ 12%), unit_economics (Gross Margin ≥ 40% or improving), path_to_profits (Operating Margin trend positive or ≥ 0%), moat (Gross Margin ≥ 30% or R&D/Rev ≥ 10%), capital_efficiency (Rule of 40 ≥ 30%) | burning_cash (FCF/Revenue < −15%) |
+| **GROWTH** | growth_rate (Revenue YoY ≥ 12%), unit_economics (Gross Margin ≥ 40% or improving), path_to_profits (Operating Margin trend positive or ≥ 0%), moat (Gross Margin ≥ 30% or R&D/Rev ≥ 10%), capital_efficiency (Rule of 40 ≥ 30%) | burning_cash (operating cash flow negative on a TTM basis) |
 
 ### Verdict Mapping (4-tier + insufficient-data sentinel)
 
 | Verdict | Rule |
 |---|---|
-| **LEADER** | 5/5 tests pass AND market-cap rank in sector ≤ 5 AND no dealbreaker |
-| **GEM** | 5/5 tests pass AND sector rank > 5 AND no dealbreaker |
+| **LEADER** | 5/5 tests pass AND no dealbreaker (size-blind — Round 9a) |
 | **WATCH** | 3–4/5 tests pass AND no dealbreaker |
 | **AVOID** | ≤ 2/5 tests pass OR any dealbreaker flag set |
 | **INSUFFICIENT_DATA** | Missing key metrics (< 3 years of filings, etc.) |
@@ -232,7 +231,7 @@ python edgar_fetcher.py --universe universe_prescreened.csv
 # Compute metrics + assign verdicts (all rows in fundamentals.db) — ~5 min
 python fundamental_screener.py --all
 
-# Pick top 100 leaders (LEADER ∪ top-GEM) -> leaders.csv — seconds
+# Pick top 100 leaders (top LEADER by score) -> leaders.csv — seconds
 python leader_selector.py --build
 ```
 
@@ -257,7 +256,7 @@ Finance/
 ├── classifier.py                # Round 7c: SIC + ticker overrides → (sector, industry_group, industry)
 ├── fundamental_screener.py      # Phase 1.3b: archetype-routed tests, verdict, peer medians
 ├── verdict_provider.py          # Unified verdict loader (single source of truth across tabs)
-├── leader_selector.py           # Phase 1.4: LEADER ∪ top-GEM -> leaders.csv
+├── leader_selector.py           # Phase 1.4: top-N LEADER by score -> leaders.csv
 ├── prescreen_rules.json         # 6-rule prescreen config (liquidity, filings, SIC, SVR)
 ├── good_firm_framework.md       # Framework spec (archetypes, tests, verdicts)
 │
