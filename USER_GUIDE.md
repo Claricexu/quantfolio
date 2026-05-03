@@ -150,7 +150,7 @@ If that ticker was already processed by the most recent Daily Report run, you'll
 - **Sub-models** — individual predictions from RF, XGB, and LGBM before blending
 
 **Valuation cards (4 cards at the top)**
-- **SVR** (Simple Value Ratio) — Market Cap ÷ Annual Revenue. Shown with a color-coded hint:
+- **SVR** (Simple Value Ratio) — Three-line layout: (1) the ratio with the inline qualifier (e.g. "3.4x Fair Value"), (2) a peer median line ("Peer median: 5.1x") showing the industry-group median for context, (3) color-coded by valuation tier. The peer line is hidden for ETFs.
   - Green = Undervalued (SVR < 3)
   - Yellow = Fair Value (3 ≤ SVR < 8)
   - Red = Expensive (SVR ≥ 8)
@@ -226,14 +226,18 @@ The Daily Report auto-scans **all 174 symbols** (100 automated leaders plus your
 
 ### Email alerts (optional)
 
-If you've configured SMTP credentials in your local `.env` file (see **Part 1, Step 4** for how to set them up), Quantfolio sends you an email called **"Quantfolio Signal Brief"** right after every scheduled 4:05 PM run — but only if there's at least one HIGH-confidence signal.
+If you've configured SMTP credentials in your local `.env` file (see **Part 1, Step 4** for how to set them up), Quantfolio sends you an email called **"Quantfolio Signal Brief"** right after every scheduled 4:05 PM run — but only if at least one row qualifies under the alert rules.
+
+A row qualifies for **BUY** in two ways: (1) both Lite and Pro signal BUY (the usual HIGH-confidence consensus), or (2) only one model signals BUY but that model's best historical strategy includes buying — meaning Pro-only BUYs fire when Pro's best strategy is Buy-Only or Full Signal, and Lite-only BUYs fire when Lite's best strategy is Buy-Only or Full Signal. A row qualifies for **SELL** only when the firing model's best strategy is Full Signal — Buy-Only and Buy & Hold tickers never trigger SELL alerts, because acting on a SELL for those would have hurt returns historically. Direct conflicts (one model BUY, the other SELL) never fire.
 
 The email includes:
-- All HIGH-confidence BUYs
-- All HIGH-confidence SELLs (filtered to Full-Signal tickers, same as the dashboard)
-- Predicted prices, percent changes, and best strategies for each
+- All qualifying BUYs (consensus and single-model BUY where that model's history backs it up)
+- All qualifying SELLs (full-signal tickers only, same as the dashboard)
+- Predicted prices, percent changes, and best strategies for each — plus each ticker's SVR and the industry-group peer median SVR for context.
 
-No signals → no email. You won't get noise.
+No qualifying rows → no email. You won't get noise.
+
+**Manual send.** A "Send Email Alert" button at the top of the Daily Report tab re-sends the brief from the currently cached report. A confirmation dialog shows the recipient count and the current BUY/SELL counts before firing — so you don't accidentally spam the list. The button is disabled until a report is loaded.
 
 ---
 
@@ -257,8 +261,8 @@ Every backtest starts with $10,000 on January 2, 2015 (or the ticker's IPO + 6 m
 
 Click this to process every ticker in your universe. The system is smart about it:
 
-- Tickers with a cached result less than **7 days old** are **skipped** (marked as "already cached")
-- Only tickers with no cache or a stale one (≥ 7 days) are re-run
+- Tickers with a cached result less than **15 days old** are **skipped** (marked as "already cached")
+- Only tickers with no cache or a stale one (≥ 15 days) are re-run
 - Lite and Pro run in parallel for each ticker (roughly halves the wall time)
 - Expect ~4-8 minutes per uncached ticker
 
@@ -578,12 +582,14 @@ You don't need to understand this to use Quantfolio, but if you're curious:
 8. **Caching layers that make the dashboard fast:**
    - **Price CSVs** are reused for the same trading day
    - **Daily Report results** are reused in Ticker Lookup until the next scheduled Daily Report run fires — meaning Friday's report stays valid through the weekend, and the cache survives a server restart by reloading from disk
-   - **Backtest JSONs** stay fresh for 7 days — the "Run All Backtests" button skips what's still cached
+   - **Backtest JSONs** stay fresh for 15 days — the "Run All Backtests" button skips what's still cached
    - **Best-strategy map** is rebuilt on demand from backtest cache files
 
 9. **The scheduled job.** On trading days, an APScheduler cron fires at 4:05 PM EST, runs the full dual-model scan across all 174 symbols, saves the report to disk, fires email alerts (if configured), and warms the Ticker Lookup fast-path cache. By the time you check the dashboard after the close, everything is ready.
 
-10. **The quarterly leader rebuild.** Four times a year (Feb 15 / May 15 / Aug 15 / Nov 15 at 2 AM), a separate cron kicks off the Layer 1 pipeline: it re-pulls the SEC-registered US equity universe, applies the prescreen, fetches the latest XBRL fundamentals, runs every ticker through the archetype-routed Good Firm tests, and writes a fresh `leaders.csv`. The 174-symbol trading universe then refreshes automatically from `leaders.csv` ∪ `Tickers.csv`. You don't do anything — new leaders just show up in Daily Report the next morning.
+10. **The biweekly backtest refresh.** Every other Friday at 9 PM ET, the server sweeps your library and re-runs any ticker whose backtest is older than 15 days. Tickers without enough price history to backtest are skipped and not retried for 8 weeks — keeps the library current without burning hours on tickers that can't produce results yet.
+
+11. **The quarterly leader rebuild.** Four times a year (Feb 15 / May 15 / Aug 15 / Nov 15 at 2 AM), a separate cron kicks off the Layer 1 pipeline: it re-pulls the SEC-registered US equity universe, applies the prescreen, fetches the latest XBRL fundamentals, runs every ticker through the archetype-routed Good Firm tests, and writes a fresh `leaders.csv`. The 174-symbol trading universe then refreshes automatically from `leaders.csv` ∪ `Tickers.csv`. You don't do anything — new leaders just show up in Daily Report the next morning.
 
 ---
 
@@ -629,9 +635,10 @@ python backtest_buy_hold.py SPY QQQ AAPL NVDA MSFT
 
 **Key timings**
 - **4:05 PM EST** — Daily Report auto-runs on trading days
+- **Every other Friday, 9 PM ET** — biweekly backtest auto-refresh
 - **Feb 15 / May 15 / Aug 15 / Nov 15 at 2 AM** — Quarterly Leader Detector rebuild (after 10-Q season)
 - **Until the next scheduled run** — Daily Report cache lifetime in Ticker Lookup (survives weekends and server restart)
-- **7 days** — How long a backtest cache file is considered fresh (Strategy Lab reuses it)
+- **15 days** — How long a backtest cache file is considered fresh (Strategy Lab reuses it)
 - **63 trading days** — How often models retrain inside a backtest
 
 ---
