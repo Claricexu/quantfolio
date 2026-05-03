@@ -976,7 +976,7 @@ def prescreen_universe():
         f"[1.1] Wrote {len(kept):,} rows to {UNIVERSE_PRESCREENED_CSV.name} "
         f"(A liquidity>=${int(rules.get('min_avg_dollar_volume_90d', 0))/1e6:.0f}M, "
         f"B n_10q>{rules.get('min_10q_count_strict_gt')}, "
-        f"C sic∉excluded, "
+        f"C sic not in excluded, "
         f"D svr<{rules.get('max_svr')}, "
         f"E finance[{fin_lo}-{fin_hi}] top-{rules.get('finance_sector_top_n_by_revenue')}, "
         f"F dual_class_dedup={'on' if dedup_on else 'off'})"
