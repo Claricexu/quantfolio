@@ -673,7 +673,6 @@
           <span style="font-size:10px;letter-spacing:1px;color:var(--text-muted);font-weight:600">VERDICT</span>
           <button class="ldr-chip active" aria-pressed="true"  data-filter="verdict" data-value="ALL"    onclick="onLeadersFilterChip(this)">All</button>
           <button class="ldr-chip"        aria-pressed="false" data-filter="verdict" data-value="LEADER" onclick="onLeadersFilterChip(this)">Leader</button>
-          <button class="ldr-chip"        aria-pressed="false" data-filter="verdict" data-value="GEM"    onclick="onLeadersFilterChip(this)">Gem</button>
           <button class="ldr-chip"        aria-pressed="false" data-filter="verdict" data-value="WATCH"  onclick="onLeadersFilterChip(this)">Watch</button>
           <button class="ldr-chip"        aria-pressed="false" data-filter="verdict" data-value="AVOID"  onclick="onLeadersFilterChip(this)">Avoid</button>
         </div>
@@ -947,28 +946,31 @@ function signalColor(sig) {
 }
 
 // ── Fundamental Verdict helpers (Phase 1.9 4-verdict schema) ──
-// Legacy 5-verdict names (INDUSTRY_LEADER / POTENTIAL_LEADER / HIDDEN_GEM)
-// are kept as fallbacks so any cached pre-1.9 JSON still renders; live
-// pipeline emits LEADER / GEM / WATCH / AVOID / INSUFFICIENT_DATA only.
+// Legacy verdict names (INDUSTRY_LEADER / POTENTIAL_LEADER / HIDDEN_GEM,
+// and the Phase-1.9 GEM tier) are kept as fallbacks so any cached older
+// JSON still renders. Round-9a-and-later pipeline emits only:
+//   LEADER / WATCH / AVOID / INSUFFICIENT_DATA
+// Pre-9a GEM rows fall back to the LEADER colour family \u2014 they are now
+// LEADERs under the size-blind verdict.
 function verdictColor(v) {
-  if (v === 'LEADER' || v === 'INDUSTRY_LEADER') return 'var(--green-text)';
-  if (v === 'GEM'    || v === 'HIDDEN_GEM')      return '#22d3ee';
+  if (v === 'LEADER' || v === 'INDUSTRY_LEADER' ||
+      v === 'GEM'    || v === 'HIDDEN_GEM')      return 'var(--green-text)';
   if (v === 'POTENTIAL_LEADER')                  return 'var(--blue-light)';
   if (v === 'WATCH')                             return 'var(--yellow-text)';
   if (v === 'AVOID')                             return 'var(--red-text)';
   return 'var(--text-ghost)';
 }
 function verdictBg(v) {
-  if (v === 'LEADER' || v === 'INDUSTRY_LEADER') return 'var(--green-bg)';
-  if (v === 'GEM'    || v === 'HIDDEN_GEM')      return 'rgba(34,211,238,0.12)';
+  if (v === 'LEADER' || v === 'INDUSTRY_LEADER' ||
+      v === 'GEM'    || v === 'HIDDEN_GEM')      return 'var(--green-bg)';
   if (v === 'POTENTIAL_LEADER')                  return 'rgba(96,165,250,0.12)';
   if (v === 'WATCH')                             return 'var(--yellow-bg)';
   if (v === 'AVOID')                             return 'var(--red-bg)';
   return 'var(--bg-cell)';
 }
 function verdictBorder(v) {
-  if (v === 'LEADER' || v === 'INDUSTRY_LEADER') return 'var(--green-border)';
-  if (v === 'GEM'    || v === 'HIDDEN_GEM')      return 'rgba(34,211,238,0.4)';
+  if (v === 'LEADER' || v === 'INDUSTRY_LEADER' ||
+      v === 'GEM'    || v === 'HIDDEN_GEM')      return 'var(--green-border)';
   if (v === 'POTENTIAL_LEADER')                  return 'rgba(96,165,250,0.4)';
   if (v === 'WATCH')                             return 'var(--yellow-border)';
   if (v === 'AVOID')                             return 'var(--red-border)';
@@ -977,20 +979,19 @@ function verdictBorder(v) {
 function verdictLabel(v) {
   return ({
     LEADER:            'Leader',
-    GEM:               'Gem',
     WATCH:             'Watch',
     AVOID:             'Avoid',
     INSUFFICIENT_DATA: 'No Fundamental Data',
-    // Legacy 5-verdict fallbacks (pre-Phase-1.9)
+    // Legacy fallbacks \u2014 older cached payloads only
+    GEM:               'Leader',
     INDUSTRY_LEADER:   'Leader',
-    HIDDEN_GEM:        'Gem',
+    HIDDEN_GEM:        'Leader',
     POTENTIAL_LEADER:  'Potential Leader',
   })[v] || (v || 'Unknown');
 }
 function verdictShort(v) {
   return ({
     LEADER:            'LEADER',
-    GEM:               'GEM',
     WATCH:             'WATCH',
     AVOID:             'AVOID',
     // Bucket 2 (2026-04-21): 'N/A' matches the dashed-amber pill copy used
@@ -998,9 +999,10 @@ function verdictShort(v) {
     // render path branches before calling this, but any future caller that
     // doesn't branch will still emit consistent microcopy.
     INSUFFICIENT_DATA: 'N/A',
-    // Legacy fallbacks
+    // Legacy fallbacks \u2014 pre-Round-9a payloads
+    GEM:               'LEADER',
     INDUSTRY_LEADER:   'LEADER',
-    HIDDEN_GEM:        'GEM',
+    HIDDEN_GEM:        'LEADER',
     POTENTIAL_LEADER:  'POTENTIAL',
   })[v] || (v || '\u2014');
 }
@@ -1183,7 +1185,7 @@ function buildVerdictCard(v) {
     </div>`).join('');
 
   const flagChips = Object.entries(flags).filter(([,f]) => f).map(([k]) => {
-    const lbl = ({ diluting:'Diluting', burning_cash:'Cash Burn', spac_or_microcap:'Micro-cap/SPAC' })[k] || k;
+    const lbl = ({ diluting:'Diluting', burning_cash:'Cash Burn', cagr_shrinking:'Shrinking Revenue', spac_or_microcap:'Micro-cap/SPAC' })[k] || k;
     return `<span style="display:inline-block;font-size:10px;font-weight:600;color:var(--red-text);background:var(--red-bg);border:1px solid var(--red-border);padding:2px 8px;border-radius:10px;letter-spacing:0.5px">\u26A0 ${lbl}</span>`;
   }).join(' ');
 
@@ -2295,10 +2297,11 @@ function closeDetail() {
 
 // Sort value extractors per column key
 const VERDICT_RANK = {
-  // Phase 1.9 4-verdict schema (primary)
-  LEADER: 0, GEM: 1, WATCH: 2, AVOID: 3, INSUFFICIENT_DATA: 4,
-  // Legacy 5-verdict fallbacks (pre-Phase-1.9)
-  INDUSTRY_LEADER: 0, HIDDEN_GEM: 1, POTENTIAL_LEADER: 2,
+  // Round 9a 4-verdict schema (primary)
+  LEADER: 0, WATCH: 1, AVOID: 2, INSUFFICIENT_DATA: 3,
+  // Legacy fallbacks — pre-9a payloads sort GEM alongside LEADER
+  // (it's now the same quality tier), legacy verdicts kept stable.
+  GEM: 0, INDUSTRY_LEADER: 0, HIDDEN_GEM: 0, POTENTIAL_LEADER: 1,
 };
 const ARCHETYPE_RANK = {
   GROWTH: 0, COMPOUNDER: 1, ARISTOCRAT: 2, MATURE: 3, SPEC: 4, UNKNOWN: 5,
