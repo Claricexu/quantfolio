@@ -52,7 +52,7 @@ Finance/
 │   └── prescreen_rules.json      # Prescreen thresholds (6 rules, tunable config)
 │
 ├── tests/
-│   ├── unit/                     # 57 plain-assert tests (see §8)
+│   ├── unit/                     # 108 plain-assert tests (see §8)
 │   └── backtest_baselines/       # Live-vs-live verify scripts for C-3 refactor
 │
 ├── diagnostics/                  # 18 one-off scripts (see §10)
@@ -88,6 +88,7 @@ Finance/
 - **Verdict loader ([`verdict_provider.py`](verdict_provider.py)):** Single source of truth for fundamental verdicts across all four tabs. Reads `screener_results.csv` with an mtime-keyed in-process cache so Lookup / Report / Leader surfaces can never disagree (Round 2 C-1).
 - **Classifier ([`classifier.py`](classifier.py), Round 7c):** The classification pipeline derives `(sector, industry_group, industry)` from SIC codes via `classifier.py`, with hard-coded `TICKER_OVERRIDES` for mega-caps whose SIC codes misrepresent their actual business (GOOGL/META/NFLX → Telecom & Media, AMZN → Retail, AAPL → Tech Hardware, TSLA → Autos, V/MA → Payments). Leaf module — standard library only, no imports from app modules — so the screener, the verdict loader, and any future consumer can pull canonical classification without coupling. Lookup is a `bisect_right` over `SIC_RANGES`; an import-time invariant fails loudly on overlapping or out-of-order ranges.
 - **Peer-median benchmarking ([`fundamental_screener.apply_peer_medians`](fundamental_screener.py:392), Round 7d):** The screener buckets scored rows by `industry_group` (Round 7c classifier) and computes per-bucket medians for 8 metrics (`revenue_yoy_growth, revenue_3y_cagr, gross_margin_ttm, operating_margin_ttm, fcf_margin_ttm, rule_40_score, roic_ttm, svr`). Writes `peer_median_{metric}` back to each row, plus `peer_count` (bucket size). Threshold: ≥5 non-null members per metric, otherwise `None` (rendered em-dash). Rows with no `industry_group` (ETFs, classifier-Unknown) get neither column. Adds 9 new columns to `screener_results.csv`; drops the legacy `svr_vs_sector_median` column (and its `+5` score bonus from `score_ticker`) — peer-median SVR supersedes it. Score drift is bounded at ±5 per ticker; rebuild `leaders.csv` post-deploy and diff to quantify churn.
+- **Alert classifier ([`api_server.py:125`](api_server.py:125), Round 8b):** `_classify_alert(lite_sig, pro_sig, best_key)` is the single rule path for both the scheduled 4:05 PM email and the manual `/api/alerts/send-manual` button. Pure function — no globals, no I/O, table-tested in `tests/unit/test_signal_alerts.py`. Rules: consensus BUY, single-model BUY validated by `best_strategy`, SELL gated by `best_strategy`, conflict suppressed.
 
 ---
 
@@ -143,10 +144,11 @@ APScheduler is configured in [`api_server.py:317-340`](api_server.py:317). Two c
 
 | Schedule | What it does |
 |---|---|
-| **4:05 PM EST, Mon–Fri** | Runs the dual-model scan across all 174 symbols, caches the result, fires email alert if any HIGH-confidence signals |
+| **4:05 PM EST, Mon–Fri** | Runs the dual-model scan across all 174 symbols, caches the result, fires email alert if any row qualifies under `_classify_alert` (Round 8b rules) |
 | **Feb 15 / May 15 / Aug 15 / Nov 15 @ 2 AM** | Triggers the Layer 1 quarterly rebuild (universe_builder → edgar_fetcher → fundamental_screener → leader_selector) |
+| **Every other Friday, 9 PM ET** | Biweekly backtest refresh (`_biweekly_backtest_refresh_job` at [`api_server.py:1573`](api_server.py:1573)). Parity check via `_compute_parity_match` against `BACKTEST_REFRESH_REFERENCE_WEEK = 19`. Re-runs any ticker whose cached backtest is ≥ 15 days old; defers Case B (insufficient data) tickers for 8 weeks via `_should_retry_case_b`. Persists last-run snapshot to `cache/last_backtest_refresh.json`. `misfire_grace_time=3600`, `max_instances=1`. |
 
-Both run in the in-process `BackgroundScheduler`. If APScheduler isn't installed, scheduling is silently skipped — the endpoints still work manually via `?refresh=true`.
+Both run in the in-process `BackgroundScheduler`. If APScheduler isn't installed, scheduling is silently skipped — the endpoints still work manually via `?refresh=true`. The Round 8c manual-trigger endpoint (`POST /api/alerts/send-manual`) and the Round 8d refresh-status endpoint (`GET /api/backtest-refresh/status`) are the user-facing surface for these schedulers.
 
 ---
 
@@ -156,7 +158,7 @@ Both run in the in-process `BackgroundScheduler`. If APScheduler isn't installed
 |---|---|---|---|
 | Price CSVs | Per trading day | `data_cache/*.csv` | Delete the file to force re-fetch |
 | Daily report (in-memory) | None at `/api/report` (serves whatever's newest); on the Ticker Lookup fast-path, the cache is acceptable until the next scheduled Daily Report run fires (22 h short-circuit for the common weekday path; otherwise a calendar walk over the Mon–Fri 4:05 PM EST cron) | `_report_cache` dict + `data_cache/dual_report_<YYYYMMDD_HHMM>.json` on disk | `?refresh=true` on `/api/report` kicks a background rerun; disk file is rewritten after each scan |
-| Backtest JSONs | 7 days | `data_cache/backtest_chart_<SYMBOL>.json` | `?refresh=true` on `/api/backtest-chart/{symbol}` |
+| Backtest JSONs | **15 days** (Round 8d — `BACKTEST_CACHE_TTL_DAYS` at [`api_server.py:1278`](api_server.py:1278)) | `data_cache/backtest_chart_<SYMBOL>.json` | `?refresh=true` on `/api/backtest-chart/{symbol}` |
 | Fundamental verdicts | mtime-keyed (CSV change = automatic invalidation) | In-process `verdict_provider._cache_state` over `screener_results.csv` | Any rewrite of `screener_results.csv` (e.g. `fundamental_screener.py --all` or a Layer 1 rebuild). New columns added to the CSV (e.g. Round 7d's `peer_median_*` + `peer_count`) are picked up automatically once `_FLOAT_COLS` / `_INT_COLS` are extended — no cache-shape change. |
 | SEC XBRL facts | 90 days | `fundamentals.db` (SQLite, WAL mode) | `edgar_fetcher.py --refresh` |
 | SEC ticker list | Per rebuild | `universe_raw.csv` | `universe_builder.py --build` |
@@ -170,7 +172,7 @@ Both run in the in-process `BackgroundScheduler`. If APScheduler isn't installed
 3. Cold-start fallback: when `_report_cache["data"]` is empty, calls `_load_latest_report_from_disk()` and re-snapshots before the freshness check, so a server restart doesn't force a fresh ~50 s recompute when a recent report exists on disk.
 4. Future-dated caches (NTP skew, manual clock change) return False — Wright-required clock-skew guard.
 
-**Latent timezone bug — file before any non-EST deployment.** Timestamps in `_run_dual_report`, `_load_latest_report_from_disk`, and `verdict_provider.load_verdict_for_symbol`'s `as_of_csv_mtime` field (Round 7d) are currently naive; the freshness helper and the verdict-card timestamp chip assume naive = `America/New_York`. Correct on the user's Windows EST machine; non-EST deployment requires the same `datetime.now(tz=ZoneInfo("America/New_York"))` fix in three write sites.
+**Timezone-aware timestamps (Round 8a, commit `ebca265`).** Resolved: four naive-timestamp write sites (`finance_model_v2.py:702`, `api_server.py:666`, `api_server.py:743`, `verdict_provider.py:318`) converted to `datetime.now(ZoneInfo('America/New_York'))`. A back-compat shim at `api_server.py:738-748` localizes any pre-Round-8a naive ISO loaded from disk so existing cache files remain valid after upgrade.
 
 ---
 
@@ -205,6 +207,10 @@ Plain-assert style (no pytest dependency); each test file exposes a `run_all()` 
 | `test_predict_ticker_warnings.py` | 2 | `stale_features_used` warning surfaces correctly when today's features have NaN (Round 5) |
 | `test_classifier.py` | 10 | Sector / industry_group / industry derivation: SIC ranges, ticker overrides, sic_description fallback, Unknown handling (Round 7c) |
 | `test_peer_median.py` | 6 | Per-bucket median aggregation, min_peers threshold, Nones excluded, missing industry_group, no cross-bucket leakage, CSV round-trip (Round 7d) |
+| `test_signal_alerts.py` | 19 | `_classify_alert` truth table — consensus BUY/SELL paths, single-model BUY/SELL validating against best_strategy keys, SELL gate, conflict suppression (Round 8b) |
+| `test_alerts_send_manual.py` | 6 | `/api/alerts/send-manual` handler — empty-cache rejection, no-recipient rejection, classifier failure path, send failure path, success path, log prefix (Round 8c) |
+| `test_backrefresh_scheduler.py` | 17 | `_compute_parity_match` year-boundary, `_classify_ticker_outcome` (completed/case_b/failed), `_write_refresh_state_file`, biweekly worker integration (Round 8d) |
+| `test_case_b_retry.py` | 9 | `_should_retry_case_b` 8-week boundary, malformed timestamp default-true, `case_b_history` migration shim (Round 8d commit 2) |
 
 **Run all:** `python tests/unit/run_all.py` — completes in a few seconds; no network, no disk-heavy fixtures.
 
