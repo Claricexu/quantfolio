@@ -16,15 +16,15 @@ index.html             <-->  api_server.py       -->    Lite model (RF + XGBoost
                                                          |
                                                          Universe = leaders.csv (100)
                                                               ∪ Tickers.csv (85 manual)
-                                                         = 174 symbols (deduped)
+                                                         ≈ 150 symbols (deduped)
 
                              Layer 1 — Leader Detector
                              universe_builder.py   -->   universe_raw.csv (2,501)
-                                                   -->   universe_prescreened.csv (1,414)
+                                                   -->   universe_prescreened.csv (~1,400)
                              edgar_fetcher.py      -->   fundamentals.db (SEC XBRL, WAL)
                              classifier.py         -->   (sector, industry_group, industry)
                                                          via SIC ranges + 9 ticker overrides
-                             fundamental_screener  -->   screener_results.csv (1,414 rows,
+                             fundamental_screener  -->   screener_results.csv (~1,400 rows,
                                                               verdict + archetype + score
                                                               + peer_median_* x 8 + peer_count)
                              verdict_provider.py   -->   unified verdict loader for all tabs
@@ -36,9 +36,9 @@ index.html             <-->  api_server.py       -->    Lite model (RF + XGBoost
 ## Features
 
 - **Ticker Lookup** — Enter any ticker and get a Lite-vs-Pro prediction with consensus signal. Four-card valuation row (SVR / Market Cap / Quarterly Revenue / P/E) plus a verdict card with three-column metric grid showing the company value alongside its industry-group peer median.
-- **Daily Report** — Auto-scans 174 symbols at market close. Sortable table; click any row to expand the verdict card inline. Banner aggregates per-date close prices across symbols. A manual "Send Email Alert" button re-fires the email from the cached report without re-running the scan.
+- **Daily Report** — Auto-scans approximately 150 symbols at market close. Sortable table; click any row to expand the verdict card inline. Banner aggregates per-date close prices across symbols. A manual "Send Email Alert" button re-fires the email from the cached report without re-running the scan.
 - **Strategy Lab** — Batch walk-forward backtesting across all tickers. Defaults to Daily Report symbols with an override toggle. Click any row to expand the equity-curve chart inline.
-- **Leader Detector** — Browse the 1,414-row prescreened SEC universe with 4-verdict tags (LEADER / GEM / WATCH / AVOID), binary archetype (GROWTH vs MATURE), sector rank, and Good Firm score. Filter by verdict, archetype, sector, or industry group. Click any row to expand the verdict card inline.
+- **Leader Detector** — Browse the prescreened SEC universe (approximately 1,400 rows) with 4-verdict tags (LEADER / GEM / WATCH / AVOID), binary archetype (GROWTH vs MATURE), sector rank, and Good Firm score. Filter by verdict, archetype, sector, or industry group. Click any row to expand the verdict card inline.
 - **Auto Strategy Mode** — ETFs use Full Signal (BUY+SELL), individual stocks use Buy-Only (BUY only, hold)
 - **SVR (Simple Value Ratio)** — Quick valuation check (Market Cap / Annualized Revenue), displayed in predictions and reports. Email alerts include a Peer SVR column showing the industry-group median SVR alongside each ticker's SVR.
 - **Best Strategy** — Each ticker's optimal risk-adjusted strategy (by Sharpe ratio) surfaced in lookup, report, and lab
@@ -58,7 +58,7 @@ Auto-generated at 4:05 PM EST on trading days. Three sortable tables (HIGH-CONFI
 - **Equity Curve Viewer** — Click any ticker row in the library to expand its interactive Chart.js equity curve inline beneath the clicked row, with all 5 strategy lines color-coded.
 
 ### Leader Detector
-- **Universe Viewer** — Sortable table of all 1,414 prescreened symbols. Columns: Symbol, Name, Sector, Market Cap, Verdict, Good Firm Score, Archetype, Sector Rank, Selected (✓ if in `leaders.csv`). Click any row to expand the verdict card inline beneath that row.
+- **Universe Viewer** — Sortable table of all prescreened symbols (approximately 1,400). Columns: Symbol, Name, Sector, Market Cap, Verdict, Good Firm Score, Archetype, Sector Rank, Selected (✓ if in `leaders.csv`). Click any row to expand the verdict card inline beneath that row.
 - **Filter Chips** — VERDICT (All / Leader / Gem / Watch / Avoid), ARCHETYPE (All / Growth / Mature), a SECTOR dropdown, and an INDUSTRY GROUP chip row that AND-combines with sector. All four filter families cross-narrow: picking Industry Group=Semiconductors trims the Sector dropdown; picking Sector=Technology trims the Industry Group chip pool.
 - **Rebuild Now** — Kicks off the Layer 1 pipeline (`universe_builder.py` → `edgar_fetcher.py` → `fundamental_screener.py` → `leader_selector.py`). Warm rebuild ≈ 10 min; cold rebuild ≈ 3.5 hr (SEC EDGAR rate-limits at 10 req/sec).
 - **Download CSV** — Export the currently filtered view for offline analysis.
@@ -269,9 +269,9 @@ Finance/
 │   └── index.html               # Dashboard UI (single-page app, 4 tabs)
 ├── Tickers.csv                  # Manual watchlist (85 symbols, unions with leaders.csv)
 ├── leaders.csv                  # Layer 1 output (100 automated picks)
-├── screener_results.csv         # Full 1,414-row screener output (feeds Leader Detector tab)
+├── screener_results.csv         # Full screener output (~1,400 rows; feeds Leader Detector tab)
 ├── universe_raw.csv             # Phase 1.0 output (2,501 SEC-registered tickers)
-├── universe_prescreened.csv     # Phase 1.1 output (1,414 after prescreen)
+├── universe_prescreened.csv     # Phase 1.1 output (~1,400 after prescreen)
 ├── fundamentals.db              # SQLite XBRL cache (SEC EDGAR facts, WAL mode)
 ├── requirements.txt             # Python dependencies (pinned)
 ├── requirements.lock            # pip freeze capture for reproducibility
@@ -295,7 +295,7 @@ Finance/
 | POST | `/api/backtest-batch` | Start batch backtest for all uncached symbols |
 | GET | `/api/backtest-batch/status` | Poll batch backtest progress |
 | GET | `/api/leaders` | Current `leaders.csv` (100 rows) with verdict, archetype, score |
-| GET | `/api/universe` | Screener rows. `?source=screener` (default, 1,414 rows w/ verdicts) \| `prescreened` \| `raw` |
+| GET | `/api/universe` | Screener rows. `?source=screener` (default, ~1,400 rows w/ verdicts) \| `prescreened` \| `raw` |
 | GET | `/api/screener/{symbol}` | Single-ticker screener row (verdict card in Ticker Lookup) |
 | POST | `/api/leaders/rebuild` | Kick off the quarterly Layer 1 rebuild pipeline |
 | GET | `/api/leaders/rebuild/status` | Poll rebuild progress (stage, % complete, last error) |
@@ -343,7 +343,7 @@ Without APScheduler, trigger manually: `GET /api/report?refresh=true`
    - **Buy-Only** (Stocks): BUY at Z >= 2.5 sigma, never sell (hold)
 6. SVR valuation filter overrides: BUY blocked if SVR > 7, SELL forced if SVR >= 15
 7. Walk-forward backtest compares 5 strategies over 10+ years, selects best by Sharpe ratio
-8. Quarterly, the Layer 1 pipeline (`universe_builder.py` → `edgar_fetcher.py` → `fundamental_screener.py` → `leader_selector.py`) regenerates `leaders.csv` from SEC XBRL filings. The 174-symbol trading universe = `leaders.csv` ∪ `Tickers.csv` (deduped)
+8. Quarterly, the Layer 1 pipeline (`universe_builder.py` → `edgar_fetcher.py` → `fundamental_screener.py` → `leader_selector.py`) regenerates `leaders.csv` from SEC XBRL filings. The trading universe (approximately 150 symbols) = `leaders.csv` ∪ `Tickers.csv` (deduped)
 
 ## Adding Symbols
 
@@ -356,7 +356,7 @@ Edit `Tickers.csv` or modify `SYMBOL_UNIVERSE` in `finance_model_v2.py`, then re
 | `ModuleNotFoundError` | Run `pip install -r requirements.txt` |
 | Yahoo Finance rate limit | Data is cached locally; delete `data_cache/*.csv` to refresh |
 | Port 8000 in use | Edit `PORT = 8000` in `api_server.py` |
-| No report data | Click Refresh — a full scan across 174 symbols typically takes 25-55 min on a laptop (cold; subsequent scans reuse price-cache) |
+| No report data | Click Refresh — a full scan across approximately 150 symbols typically takes 25-55 min on a laptop (cold; subsequent scans reuse price-cache) |
 | RF predict hangs on Windows | All models use `n_jobs=1` to avoid joblib deadlock |
 | Batch backtest stuck | Check server console for errors; restart server if needed |
 | Best Strategy shows "—" | Run batch backtest in Strategy Lab to generate data |

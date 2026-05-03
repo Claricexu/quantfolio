@@ -81,9 +81,9 @@ Finance/
 
 ## 3. Architecture in 60 seconds
 
-- **Layer 2 (stable, do not touch casually):** FastAPI backend → runs Lite/Pro models on a universe of 174 symbols → serves predictions + backtests to the dashboard. See [README.md](README.md) for the full tour.
-- **Layer 1 (pipeline):** SEC EDGAR → ~2,500 tickers → prescreen to ~1,414 → fundamentals screen by archetype → top 100 → `leaders.csv`. See [good_firm_framework.md](good_firm_framework.md) for the rubric and [TWO_LAYER_ARCHITECTURE_PLAN.md](TWO_LAYER_ARCHITECTURE_PLAN.md) for the decision history.
-- **The bridge:** [`get_all_symbols()`](finance_model_v2.py:146) in `finance_model_v2.py` reads `leaders.csv ∪ Tickers.csv` and exposes the 174-symbol universe to Layer 2.
+- **Layer 2 (stable, do not touch casually):** FastAPI backend → runs Lite/Pro models on a universe of approximately 150 symbols → serves predictions + backtests to the dashboard. See [README.md](README.md) for the full tour.
+- **Layer 1 (pipeline):** SEC EDGAR → ~2,500 tickers → prescreen to ~1,400 → fundamentals screen by archetype → top 100 → `leaders.csv`. See [good_firm_framework.md](good_firm_framework.md) for the rubric and [TWO_LAYER_ARCHITECTURE_PLAN.md](TWO_LAYER_ARCHITECTURE_PLAN.md) for the decision history.
+- **The bridge:** [`get_all_symbols()`](finance_model_v2.py:146) in `finance_model_v2.py` reads `leaders.csv ∪ Tickers.csv` and exposes the trading universe (approximately 150 symbols) to Layer 2.
 - **BacktestEngine ([`backtest_engine.py`](backtest_engine.py)):** One walk-forward simulator shared by `predict_ticker`, `backtest_symbol`, and `backtest_multi_strategy`. Before Round 3 each caller had its own loop with different guards and different ensemble builders — same ticker could report different Sharpe. Now: one `BacktestConfig` → one `run(strategy_fn)` call path → one `config_hash` (SHA-256) that changes whenever training does. `MIN_ZSCORE_SAMPLES` is enforced inside the engine, not the callers. Only `ensemble_builder='oof'` is supported; the legacy val-MAE `fast` builder was deleted in C-3 Phase 5. See [round3-summary.md](round3-summary.md) for the full refactor.
 - **Verdict loader ([`verdict_provider.py`](verdict_provider.py)):** Single source of truth for fundamental verdicts across all four tabs. Reads `screener_results.csv` with an mtime-keyed in-process cache so Lookup / Report / Leader surfaces can never disagree (Round 2 C-1).
 - **Classifier ([`classifier.py`](classifier.py), Round 7c):** The classification pipeline derives `(sector, industry_group, industry)` from SIC codes via `classifier.py`, with hard-coded `TICKER_OVERRIDES` for mega-caps whose SIC codes misrepresent their actual business (GOOGL/META/NFLX → Telecom & Media, AMZN → Retail, AAPL → Tech Hardware, TSLA → Autos, V/MA → Payments). Leaf module — standard library only, no imports from app modules — so the screener, the verdict loader, and any future consumer can pull canonical classification without coupling. Lookup is a `bisect_right` over `SIC_RANGES`; an import-time invariant fails loudly on overlapping or out-of-order ranges.
@@ -144,7 +144,7 @@ APScheduler is configured in [`api_server.py:317-340`](api_server.py:317). Two c
 
 | Schedule | What it does |
 |---|---|
-| **4:05 PM EST, Mon–Fri** | Runs the dual-model scan across all 174 symbols, caches the result, fires email alert if any row qualifies under `_classify_alert` (Round 8b rules) |
+| **4:05 PM EST, Mon–Fri** | Runs the dual-model scan across all daily-scan symbols (approximately 150), caches the result, fires email alert if any row qualifies under `_classify_alert` (Round 8b rules) |
 | **Feb 15 / May 15 / Aug 15 / Nov 15 @ 2 AM** | Triggers the Layer 1 quarterly rebuild (universe_builder → edgar_fetcher → fundamental_screener → leader_selector) |
 | **Every other Friday, 9 PM ET** | Biweekly backtest refresh (`_biweekly_backtest_refresh_job` at [`api_server.py:1573`](api_server.py:1573)). Parity check via `_compute_parity_match` against `BACKTEST_REFRESH_REFERENCE_WEEK = 19`. Re-runs any ticker whose cached backtest is ≥ 15 days old; defers Case B (insufficient data) tickers for 8 weeks via `_should_retry_case_b`. Persists last-run snapshot to `cache/last_backtest_refresh.json`. `misfire_grace_time=3600`, `max_instances=1`. |
 

@@ -192,7 +192,7 @@ Use them together: a HIGH-confidence signal from two models with strong Dir Accu
 
 ## Part 4 — The Daily Report Tab
 
-The Daily Report auto-scans **all 174 symbols** (100 automated leaders plus your manual watchlist) at once and shows you a sortable ranking of opportunities.
+The Daily Report auto-scans **all of your daily-scan symbols** (approximately 150 — 100 automated leaders plus your manual watchlist) at once and shows you a sortable ranking of opportunities.
 
 ### When it runs
 
@@ -311,7 +311,7 @@ Quantfolio runs an automated fundamentals screen over the entire SEC-registered 
 
 ### What's on the page
 
-**The table** — 1,414 prescreened symbols (market cap ≥ $1B, price > $3, average daily dollar volume > $1M). Columns (in on-screen order):
+**The table** — approximately 1,400 prescreened symbols (market cap ≥ $1B, price > $3, average daily dollar volume > $1M). Columns (in on-screen order):
 
 | Column | What it means |
 |---|---|
@@ -545,7 +545,7 @@ You probably don't have Git installed. Either:
 | **"ModuleNotFoundError"** | Run `pip install -r requirements.txt` again. |
 | **Dashboard won't load in browser** | Make sure the black Command Prompt window is still running. Try http://127.0.0.1:8000 instead of localhost. |
 | **"Port 8000 in use"** | Another program is using that port. Close it, or edit `PORT = 8000` inside `api_server.py`. |
-| **First scan takes forever** | Normal. A full dual-model scan of all 174 symbols typically takes 25-55 minutes on a laptop (the UI banner and `/api/report` both cite this band). The first run is at the high end because nothing is cached. |
+| **First scan takes forever** | Normal. A full dual-model scan of all your daily-scan symbols (approximately 150) typically takes 25-55 minutes on a laptop (the UI banner and `/api/report` both cite this band). The first run is at the high end because nothing is cached. |
 | **Backtest says "file not found"** | The ticker isn't cached yet. Look it up on the dashboard once, then try again. |
 | **Best Strategy shows "—"** | Click "Run All Backtests" in Strategy Lab to generate data. |
 | **Daily Report shows yesterday's prices** | The scheduled run happens at 4:05 PM EST. Before that, you'll see the previous trading day. Hit Refresh manually after 4:05 PM EST to force an update. |
@@ -585,11 +585,11 @@ You don't need to understand this to use Quantfolio, but if you're curious:
    - **Backtest JSONs** stay fresh for 15 days — the "Run All Backtests" button skips what's still cached
    - **Best-strategy map** is rebuilt on demand from backtest cache files
 
-9. **The scheduled job.** On trading days, an APScheduler cron fires at 4:05 PM EST, runs the full dual-model scan across all 174 symbols, saves the report to disk, fires email alerts (if configured), and warms the Ticker Lookup fast-path cache. By the time you check the dashboard after the close, everything is ready.
+9. **The scheduled job.** On trading days, an APScheduler cron fires at 4:05 PM EST, runs the full dual-model scan across all your daily-scan symbols (approximately 150), saves the report to disk, fires email alerts (if configured), and warms the Ticker Lookup fast-path cache. By the time you check the dashboard after the close, everything is ready.
 
 10. **The biweekly backtest refresh.** Every other Friday at 9 PM ET, the server sweeps your library and re-runs any ticker whose backtest is older than 15 days. Tickers without enough price history to backtest are skipped and not retried for 8 weeks — keeps the library current without burning hours on tickers that can't produce results yet.
 
-11. **The quarterly leader rebuild.** Four times a year (Feb 15 / May 15 / Aug 15 / Nov 15 at 2 AM), a separate cron kicks off the Layer 1 pipeline: it re-pulls the SEC-registered US equity universe, applies the prescreen, fetches the latest XBRL fundamentals, runs every ticker through the archetype-routed Good Firm tests, and writes a fresh `leaders.csv`. The 174-symbol trading universe then refreshes automatically from `leaders.csv` ∪ `Tickers.csv`. You don't do anything — new leaders just show up in Daily Report the next morning.
+11. **The quarterly leader rebuild.** Four times a year (Feb 15 / May 15 / Aug 15 / Nov 15 at 2 AM), a separate cron kicks off the Layer 1 pipeline: it re-pulls the SEC-registered US equity universe, applies the prescreen, fetches the latest XBRL fundamentals, runs every ticker through the archetype-routed Good Firm tests, and writes a fresh `leaders.csv`. The trading universe (approximately 150 symbols) then refreshes automatically from `leaders.csv` ∪ `Tickers.csv`. You don't do anything — new leaders just show up in Daily Report the next morning.
 
 ---
 
@@ -629,9 +629,9 @@ python backtest_buy_hold.py SPY QQQ AAPL NVDA MSFT
 | Tab | What it does |
 |---|---|
 | **Ticker Lookup** | Single-ticker deep dive with both models, consensus, SVR, best strategy, and optional backtest chart |
-| **Daily Report** | Market-wide scan of all 174 symbols with HIGH-confidence BUY and SELL sections |
+| **Daily Report** | Market-wide scan of all daily-scan symbols (approximately 150) with HIGH-confidence BUY and SELL sections |
 | **Strategy Lab** | Batch backtest library, strategy recommendations, and interactive equity curves |
-| **Leader Detector** | View the 1,414-row prescreened universe. Filter by Verdict / Archetype / Sector, click Rebuild Now, Download CSV. |
+| **Leader Detector** | View the prescreened universe (approximately 1,400 rows). Filter by Verdict / Archetype / Sector, click Rebuild Now, Download CSV. |
 
 **Key timings**
 - **4:05 PM EST** — Daily Report auto-runs on trading days
