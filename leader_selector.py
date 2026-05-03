@@ -1,33 +1,29 @@
 #!/usr/bin/env python3
 """
-Phase 1.4 — Leader Selector (Phase 1.9 4-verdict schema).
+Phase 1.4 — Leader Selector (Round 9a 4-verdict schema, size-blind).
 
 Reads screener_results.csv (Phase 1.3 output) and selects up to N tickers
-for leaders.csv per the simplified Phase 1.9 rule:
+for leaders.csv:
 
-    leaders.csv = all LEADER ∪ top GEM by good_firm_score until total = N
+    leaders.csv = top-N LEADER rows by good_firm_score
+                  (under-fill if fewer than N LEADERs exist)
 
-This replaces the pre-1.9 selection logic (3-step INDUSTRY_LEADER +
-POTENTIAL_LEADER + per-sector HIDDEN_GEM with IL quality gate). The
-Phase 1.9 archetype-dispatched `_verdict()` in `fundamental_screener.py`
-already enforces:
+Round 9a (2026-05-03) collapsed the LEADER/GEM split — see
+`fundamental_screener._verdict`. The pool is now a single LEADER bucket
+sorted by `good_firm_score` desc (tie-break: market_cap desc). If LEADER
+count < target_size we accept under-fill rather than reaching into WATCH:
+WATCH means "3–4/5 tests passed", which is a different quality tier than
+the rest of `leaders.csv` and would dilute Layer 2's training pool.
 
-  - LEADER = 5/5 archetype-tuned tests AND market_cap_rank_in_sector ≤ 5
-             AND no dealbreaker
-  - GEM    = 5/5 archetype-tuned tests AND market_cap_rank_in_sector > 5
-             AND no dealbreaker
-  - WATCH  = 3-4/5 tests, no dealbreaker
-  - AVOID  = ≤2/5 tests OR any dealbreaker
+Pre-Round-9a history: the schema split 5/5 winners into LEADER (top-5
+sector-rank) and GEM (everything else), and this selector filled with
+`all LEADER ∪ top GEM by good_firm_score`. With GEM gone, the union step
+is gone too. The pre-1.9 selection (3-step INDUSTRY_LEADER + POTENTIAL_LEADER
++ per-sector HIDDEN_GEM with IL quality gate) was already retired in 1.9
+and stays retired.
 
-So the pre-1.9 IL quality gate (revenue_3y_cagr ≥ 0 + OM ≥ 5% + R40 ≥ 20)
-is redundant — LEADER already means "passes all 5 archetype-tuned tests
-for either MATURE or GROWTH, with proven sector-rank standing." The old
-Step 3 per-SIC-2 sector diversifier also goes away: LEADER ∪ top-GEM by
-score already reflects the business-quality ordering we want, and GEM
-is itself the "best-of-sector runner-up" tier in the new schema.
-
-Dealbreaker screen kept as defense-in-depth (should be a no-op since
-LEADER/GEM verdicts already exclude rows with any flag_* set).
+Dealbreaker screen kept as defense-in-depth (should be a no-op since the
+LEADER verdict already excludes rows with any flag_* set).
 
 Output: leaders.csv with symbol, cik, name, sector, sic, verdict,
 good_firm_score, archetype, market_cap, selection_reason. Consumed by
@@ -61,11 +57,11 @@ LEADERS_FIELDS = [
     'market_cap', 'selection_reason',
 ]
 
-# Defense-in-depth: Phase 1.9 `_verdict()` already routes rows with any
-# dealbreaker flag straight to AVOID, so a row reaching this selector
-# tagged LEADER or GEM should never trip these checks. Kept anyway so a
-# bug in the screener can't silently leak a flagged ticker into
-# leaders.csv (which feeds Layer 2's daily prediction pipeline).
+# Defense-in-depth: `_verdict()` already routes rows with any dealbreaker
+# flag straight to AVOID, so a row reaching this selector tagged LEADER
+# should never trip these checks. Kept anyway so a bug in the screener
+# can't silently leak a flagged ticker into leaders.csv (which feeds
+# Layer 2's daily prediction pipeline).
 DEALBREAKER_FIELDS = ('flag_diluting', 'flag_burning_cash',
                       'flag_spac_or_microcap')
 
@@ -125,39 +121,36 @@ def _load_cik_map(path):
 
 def select_leaders(screener_rows, target_size=DEFAULT_TARGET_SIZE):
     """
-    Phase 1.9 selection: all LEADER ∪ top GEM by good_firm_score until
-    total = target_size.
+    Round 9a selection: top-N LEADER rows by good_firm_score.
 
     Returns (selected_rows, selection_reason_map).
 
     selected_rows preserves screener_rows' row objects verbatim; the caller
     is responsible for projecting down to LEADERS_FIELDS on write.
 
-    selection_reason_map: symbol → short string ('leader' or 'gem').
+    selection_reason_map: symbol → 'leader' (only value emitted).
 
-    Ordering notes:
-      - LEADER rows come first, sorted by good_firm_score desc (tie-break
-        market_cap desc). If LEADER count ≥ target_size we truncate there
-        and emit zero GEMs — this is intentional: a target_size=100 run
-        with 150 LEADERs means "top 100 LEADERs" without GEM dilution.
-      - GEMs fill whatever slack remains, same sort key.
-      - WATCH / AVOID / INSUFFICIENT_DATA / UNKNOWN never enter the pool.
+    Ordering: LEADER rows sorted by good_firm_score desc, tie-break
+    market_cap desc. Stable across runs given identical input.
+
+    Under-fill is acceptable: if fewer than target_size LEADERs exist we
+    do not reach into WATCH. WATCH means 3–4/5 tests passed (not a quality
+    peak) and mixing it into leaders.csv would dilute Layer 2's training
+    pool. Pre-Round-9a behaviour reached into GEM (5/5 + smaller-cap) for
+    fill, but GEM no longer exists — quality-equivalent rows are now all
+    tagged LEADER directly.
     """
-    # Pre-filter: exclude everything except LEADER + GEM, and defensively
-    # drop any row carrying a dealbreaker flag (should be impossible for
-    # LEADER/GEM under Phase 1.9 but we belt-and-brace).
+    # Pre-filter: LEADER only, defensively drop any row carrying a
+    # dealbreaker flag (should be impossible under the current verdict
+    # but we belt-and-brace).
     pool_leader = []
-    pool_gem = []
     for r in screener_rows:
         verdict = (r.get('verdict') or '').upper()
-        if verdict not in ('LEADER', 'GEM'):
+        if verdict != 'LEADER':
             continue
         if _is_dealbreaker(r):
             continue
-        if verdict == 'LEADER':
-            pool_leader.append(r)
-        else:
-            pool_gem.append(r)
+        pool_leader.append(r)
 
     def _sort_key(r):
         # Primary: score desc. Secondary: mcap desc. Stable, reproducible.
@@ -165,7 +158,6 @@ def select_leaders(screener_rows, target_size=DEFAULT_TARGET_SIZE):
                 -_float(r.get('market_cap')))
 
     pool_leader.sort(key=_sort_key)
-    pool_gem.sort(key=_sort_key)
 
     selected = []
     reasons = {}
@@ -178,18 +170,10 @@ def select_leaders(screener_rows, target_size=DEFAULT_TARGET_SIZE):
         reasons[sym] = reason
         return True
 
-    # Step 1: all LEADER rows (capped at target_size).
     for r in pool_leader:
         if len(selected) >= target_size:
             break
         _add(r, 'leader')
-
-    # Step 2: top GEM by score to fill remaining slots.
-    if len(selected) < target_size:
-        for r in pool_gem:
-            if len(selected) >= target_size:
-                break
-            _add(r, 'gem')
 
     return selected, reasons
 
@@ -219,7 +203,7 @@ def write_leaders_csv(selected, reasons, cik_map, path):
 def main():
     p = argparse.ArgumentParser(
         description="Phase 1.4 — Select up to N industry leaders from "
-                    "screener results (Phase 1.9 LEADER ∪ top-GEM schema)"
+                    "screener results (Round 9a top-N LEADER schema)"
     )
     p.add_argument('--screener', default=str(SCREENER_CSV),
                    help=f'Input screener_results.csv '
@@ -270,6 +254,14 @@ def main():
     for k in sorted(by_reason.keys()):
         print(f"  {k}: {by_reason[k]}")
 
+    # Round 9a: surface under-fill explicitly. WATCH no longer feeds into
+    # leaders.csv — if LEADER count is consistently below the cap on real
+    # universe runs, that's a signal to revisit the rubric or the cap.
+    if len(selected) < args.target_size:
+        print(f"\n[note] Under-fill: {len(selected)}/{args.target_size} "
+              f"slots filled. Pool exhausted at the LEADER tier (WATCH "
+              f"intentionally not eligible).")
+
     # Archetype split — quick eyeball for MATURE/GROWTH balance
     by_arch = {}
     for r in selected:
@@ -281,7 +273,7 @@ def main():
             print(f"  {a}: {by_arch[a]}")
 
     # Any LEADER rows dropped by dealbreaker defense (should be empty —
-    # Phase 1.9 verdict already excludes those)
+    # the verdict already routes flagged rows to AVOID)
     all_leader_syms = {(r.get('symbol') or '').strip().upper()
                        for r in screener_rows
                        if (r.get('verdict') or '').upper() == 'LEADER'}
@@ -292,7 +284,8 @@ def main():
                                     if v == 'leader')
     if leader_dropped and leader_count_in_selection == len(all_leader_syms):
         print(f"\n[warn] LEADER verdicts dropped by dealbreaker screen "
-              f"(unexpected under Phase 1.9): {sorted(leader_dropped)}")
+              f"(unexpected — verdict should pre-filter these): "
+              f"{sorted(leader_dropped)}")
 
     write_leaders_csv(selected, reasons, cik_map, args.out)
 

@@ -482,7 +482,9 @@ def compute_metrics(symbol, sector_context=None, conn=None):
     # Round 7d: dropped sector_svr_median ratio. SVR peer comparison now lives
     # in `peer_median_svr` (industry_group bucket, computed by
     # fundamental_screener.apply_peer_medians). sector_context still carries
-    # the rank used by the LEADER/GEM verdict split.
+    # `sector_rank` for row-level context (Round 9a dropped its role in the
+    # verdict but kept the field — consumed by the moat-fallback test and
+    # surfaced as `market_cap_rank_in_sector` on the row).
     sector_rank = (sector_context or {}).get('sector_rank')
 
     # ── Dealbreaker flags ──

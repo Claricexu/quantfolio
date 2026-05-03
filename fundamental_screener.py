@@ -6,8 +6,7 @@ GROWTH on a binary Revenue-YoY split (threshold `CLASSIFIER_YOY_THRESHOLD`,
 locked at 12% per `diag_threshold_sensitivity.py` 2026-04-18); per-archetype
 5-test rubrics + per-archetype dealbreakers then produce a 4-verdict schema:
 
-    LEADER  — 5/5 tests + rank ≤ 5 in sector + no dealbreaker
-    GEM     — 5/5 tests + rank > 5 + no dealbreaker
+    LEADER  — 5/5 tests + no dealbreaker  (Round 9a: rank dimension dropped)
     WATCH   — 3–4/5 tests + no dealbreaker
     AVOID   — ≤ 2/5 tests OR any dealbreaker
     INSUFFICIENT_DATA — < 3 tests have non-None result (ETFs, ingestion gaps)
@@ -274,6 +273,8 @@ def score_ticker(metrics):
     # in the per-metric `peer_median_*` columns (industry_group buckets,
     # min_peers=5) rather than as a scoring lever. Score drift on existing
     # rows is bounded to -5 (rows previously hitting the bonus); see CHANGELOG.
+    # Theoretical max: 5*15 + 10 + 5 + 5 = 95. The earlier `min(score, 100)`
+    # cap was dead code (Round 9a removal).
     score = passes * 15
     if known > 0 and not any_dealbreaker:
         score += 10
@@ -281,7 +282,6 @@ def score_ticker(metrics):
         score += 5
     if (m.get('rule_40_score') or 0) >= 40.0:
         score += 5
-    score = min(score, 100)
 
     verdict = _verdict(m, passes, known, any_dealbreaker, archetype)
 
@@ -297,7 +297,15 @@ def score_ticker(metrics):
 
 
 def _verdict(m, passes, known, any_dealbreaker, archetype):
-    """Phase 1.9 4-verdict schema. LEADER/GEM split on sector rank at 5/5."""
+    """Round 9a 4-verdict schema (size-blind).
+
+    Round 9a (2026-05-03): collapsed the LEADER/GEM split. The pre-9a schema
+    used `market_cap_rank_in_sector ≤ 5` to differentiate top-of-sector
+    LEADERs from smaller-cap GEMs at 5/5 quality; that turned size into a
+    quality label even though the rubric tests were identical. Verdicts now
+    encode pure quality. Sector-rank context still rides on the row via
+    `market_cap_rank_in_sector`, just not at the verdict layer.
+    """
     # Not enough test data (ETFs, ADRs, newly listed, ingestion gaps)
     if archetype == 'UNKNOWN' or known < 3:
         return 'INSUFFICIENT_DATA'
@@ -308,12 +316,8 @@ def _verdict(m, passes, known, any_dealbreaker, archetype):
     if passes <= 2:
         return 'AVOID'
 
-    rank = m.get('market_cap_rank_in_sector')
-
     if passes == 5:
-        if rank is not None and rank <= 5:
-            return 'LEADER'
-        return 'GEM'
+        return 'LEADER'
     # passes == 3 or 4 → WATCH (4/5 decel distinction collapsed into WATCH
     # since per-archetype growth tests already handle decel semantics)
     return 'WATCH'
@@ -341,7 +345,9 @@ def apply_sector_context(all_metrics, min_peers=3):
     benchmarking surface now lives in `apply_peer_medians` (called separately,
     bucketed by `industry_group` not SIC-2, min_peers=5) which writes the
     `peer_median_*` family of columns. The market-cap rank logic stays here
-    because it's still SIC-2 keyed and used by the LEADER/GEM verdict split.
+    because it's still SIC-2 keyed and surfaced on the row for context (and
+    consumed by the moat-fallback test); Round 9a dropped its role in the
+    verdict, but the column itself stays.
     """
     buckets = {}
     for m in all_metrics:
@@ -482,7 +488,6 @@ def run_single(symbol, cached_full_screen=None, conn=None):
 
 VERDICT_EMOJI = {
     'LEADER': '[LEADER]',
-    'GEM':    '[ GEM  ]',
     'WATCH':  '[WATCH ]',
     'AVOID':  '[AVOID ]',
     'INSUFFICIENT_DATA': '[ n/a  ]',
