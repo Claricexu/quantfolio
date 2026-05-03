@@ -1,4 +1,33 @@
 
+## 2026-05-02 — Round 8d
+
+- Biweekly backtest auto-refresh: every other Friday at 9 PM ET, the server sweeps your library and re-runs any ticker whose cached backtest is at least 15 days old. Keeps the Strategy Lab fresh without burning a manual "Run All Backtests" job.
+- Backtest cache TTL bumped from 7 days to 15 days (`BACKTEST_CACHE_TTL_DAYS`). The "Run All Backtests" button and the new biweekly cron both use the longer freshness window.
+- Case B (insufficient-data) tickers — names that fail to backtest because they lack enough history — are now classified separately and deferred for 8 weeks before retry, so a brand-new IPO doesn't get re-attempted every other Friday for nothing.
+- New endpoint: `GET /api/backtest-refresh/status` exposes last run, next run, and the Case B history for visibility into the scheduler.
+- Refresh state persists to `cache/last_backtest_refresh.json` so a server restart doesn't lose the parity anchor or the Case B deferrals.
+
+## 2026-05-02 — Round 8c
+
+- Daily Report tab now has a **Send Email Alert** button that re-fires the Signal Brief from the most recent cached report — handy if SMTP was misconfigured during the scheduled 4:05 PM run, or if you want to forward a copy to a new recipient without waiting for tomorrow.
+- Confirmation dialog before sending shows the recipient count and the current BUY/SELL counts, so the manual trigger isn't a single accidental click away from blasting the list.
+- New endpoint: `POST /api/alerts/send-manual` re-sends the brief from the cached daily report; it shares the same `_classify_alert` rule path as the scheduled cron, so manual and automatic emails always agree on which rows qualify.
+- Companion endpoint `GET /api/alerts/config` exposes the SMTP-enabled flag and the recipient count for the confirmation dialog.
+
+## 2026-05-01 — Round 8b
+
+- Email alert rules refined with backtest-validated single-model paths: a Pro-only BUY now fires when the ticker's `best_strategy` is `pro_buyonly` or `pro_full`; a Lite-only BUY fires when best is `lite_buyonly` or `lite_full`. Consensus BUY (both models) still fires unconditionally.
+- SELL gate hardened: SELLs are suppressed entirely when `best_strategy` is `buyhold`, `lite_buyonly`, or `pro_buyonly`. SELL fires only on `pro_full` + Pro=SELL or `lite_full` + Lite=SELL. Conflicts (one model BUY, the other SELL) never fire.
+- Email alerts now include a Peer SVR column showing the industry-group median SVR alongside each ticker's own SVR — quick valuation context per row.
+- Daily Report's All Symbols Consensus column now uses the same `classifyAlertRow` predicate as the email, so the dashboard and the email never disagree on what "qualifying" means.
+
+## 2026-04-30 — Round 8a
+
+- SVR card on Ticker Lookup restructured into a 3-line layout: ratio with inline qualifier, peer median row, color-coded valuation tier. The verdict card's old SVR row was removed (the Lookup card is now the canonical SVR surface). Iterated three times to land the final vertical balance.
+- All four naive-timestamp write sites in the report and verdict pipeline now write `datetime.now(ZoneInfo('America/New_York'))` — the latent non-EST deployment bug flagged in DEVELOPMENT.md is closed. A back-compat shim localizes any pre-upgrade naive ISO loaded from disk.
+- ET marker added to user-facing time-of-day displays (Daily Report banner, scheduler hints) for timezone clarity.
+- Accessibility bundle: `aria-pressed` on filter chips, `aria-live` on load surfaces, `prefers-reduced-motion` honored, Escape closes inline detail panes, WCAG AA contrast bump on remaining 10–13px chrome.
+
 ## 2026-04-28 — Round 7d
 
 - Verdict card now shows a peer-median column alongside each company value — for the 8 metrics where it makes sense (Revenue YoY, Revenue 3Y CAGR, Gross Margin, Operating Margin, FCF Margin, Rule of 40, ROIC, SVR). Peers are bucketed by industry group; em-dash renders when fewer than 5 industry-group peers report the metric. Categorical rows (Sector, Industry Group, Industry, Sector Rank) render em-dash in the peer column to keep visual rhythm.
