@@ -106,7 +106,7 @@ Add the ticker to `ETF_TICKERS` in [`finance_model_v2.py:82`](finance_model_v2.p
 - Add it to [`MATURE_TESTS`](fundamental_screener.py:112) or [`GROWTH_TESTS`](fundamental_screener.py:188) as a `(name, fn)` tuple.
 - If the test needs a new metric, add it in [`fundamental_metrics.py`](fundamental_metrics.py) first.
 - Re-run `python fundamental_screener.py --all` to regenerate `screener_results.csv`.
-- **Important:** anchor-test your change. Known-good anchors are KO/JNJ/PG/WMT/MCD (must stay MATURE LEADER/GEM) and NVDA/MSFT/META/CRWD/NOW (must stay GROWTH LEADER/GEM). See `diagnostics/diag_anchor_breakdown.py` for the reference checker.
+- **Important:** anchor-test your change. Known-good anchors are KO/JNJ/PG/WMT/MCD (must stay MATURE LEADER) and NVDA/MSFT/META/CRWD/NOW (must stay GROWTH LEADER). See `diagnostics/diag_anchor_breakdown.py` for the reference checker (note: the diagnostic script's verdict synthesis predates Round 9a's GEM removal — its output still mentions GEM, but a row landing in either tier under that script's logic means "5/5 + clean" today, which is just LEADER).
 
 ### 4.4 Add a new ML model
 The cleanest pattern is "v4" alongside existing v2/v3:
@@ -230,7 +230,7 @@ Each run takes a few minutes (it hits yfinance). Run after any change to `backte
 
 ### 8.3 Still-missing, high-leverage targets
 
-1. **`tests/test_screener_verdicts.py`** — anchor-test that KO/JNJ/PG/WMT/MCD land MATURE LEADER/GEM and NVDA/MSFT/META/CRWD/NOW land GROWTH LEADER/GEM. The single biggest regression barrier for the rubric (the Cat-A gap tickers CRWD/VLO/APA/FSLY should assert TAXONOMY_GAP).
+1. **`tests/test_screener_verdicts.py`** — anchor-test that KO/JNJ/PG/WMT/MCD land MATURE LEADER and NVDA/MSFT/META/CRWD/NOW land GROWTH LEADER (size-blind verdict, Round 9a). The single biggest regression barrier for the rubric (the Cat-A gap tickers CRWD/VLO/APA/FSLY should assert INSUFFICIENT_DATA from a known taxonomy gap). Round 9a shipped `tests/unit/test_screener_verdict.py` covering the contract semantics; the remaining gap is the live-data anchor test using cached fundamentals.
 2. **`tests/test_env_config.py`** — verify `.env` loading doesn't silently disable SMTP.
 3. **`tests/test_feature_engineering.py`** — snapshot that `engineer_features_v2` / `engineer_features_v3` produce the expected feature count (13 / 22) and no NaN at the last row.
 4. **`tests/test_cache_ttl.py`** — verify the 22 h Ticker Lookup fast-path and the 7-day backtest TTL behave correctly across the boundary.

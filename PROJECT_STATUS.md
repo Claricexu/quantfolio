@@ -14,7 +14,7 @@ A local-first, single-user equity research tool. Screens a ~1,400-ticker univers
 
 **Strategy Lab** — backtest comparison across strategies, defaults to Daily Report symbols, inline chart expansion beneath clicked rows.
 
-**Leader Detector** — filters the universe by canonical Sector and Industry Group, shows leader/gem classification, inline verdict cards on row click.
+**Leader Detector** — filters the universe by canonical Sector and Industry Group, shows the four-tier verdict (LEADER / WATCH / AVOID / INSUFFICIENT_DATA), inline verdict cards on row click.
 
 **Classifier** — pure Python module with 10 sectors, 29 industry groups, hand-crafted overrides for 9 mega-caps whose SIC codes misrepresent their actual business.
 
