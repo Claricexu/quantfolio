@@ -36,11 +36,11 @@ index.html             <-->  api_server.py       -->    Lite model (RF + XGBoost
 ## Features
 
 - **Ticker Lookup** — Enter any ticker and get a Lite-vs-Pro prediction with consensus signal. Four-card valuation row (SVR / Market Cap / Quarterly Revenue / P/E) plus a verdict card with three-column metric grid showing the company value alongside its industry-group peer median.
-- **Daily Report** — Auto-scans 174 symbols at market close. Sortable table; click any row to expand the verdict card inline. Banner aggregates per-date close prices across symbols.
+- **Daily Report** — Auto-scans 174 symbols at market close. Sortable table; click any row to expand the verdict card inline. Banner aggregates per-date close prices across symbols. A manual "Send Email Alert" button re-fires the email from the cached report without re-running the scan.
 - **Strategy Lab** — Batch walk-forward backtesting across all tickers. Defaults to Daily Report symbols with an override toggle. Click any row to expand the equity-curve chart inline.
 - **Leader Detector** — Browse the 1,414-row prescreened SEC universe with 4-verdict tags (LEADER / GEM / WATCH / AVOID), binary archetype (GROWTH vs MATURE), sector rank, and Good Firm score. Filter by verdict, archetype, sector, or industry group. Click any row to expand the verdict card inline.
 - **Auto Strategy Mode** — ETFs use Full Signal (BUY+SELL), individual stocks use Buy-Only (BUY only, hold)
-- **SVR (Simple Value Ratio)** — Quick valuation check (Market Cap / Annualized Revenue), displayed in predictions and reports
+- **SVR (Simple Value Ratio)** — Quick valuation check (Market Cap / Annualized Revenue), displayed in predictions and reports. Email alerts include a Peer SVR column showing the industry-group median SVR alongside each ticker's SVR.
 - **Best Strategy** — Each ticker's optimal risk-adjusted strategy (by Sharpe ratio) surfaced in lookup, report, and lab
 
 ## Dashboard Tabs
@@ -262,7 +262,7 @@ Finance/
 ├── good_firm_framework.md       # Framework spec (archetypes, tests, verdicts)
 │
 ├── tests/
-│   ├── unit/                    # 57 plain-assert unit tests (BacktestEngine, classifier, peer median, HTTP)
+│   ├── unit/                    # 108 plain-assert unit tests (BacktestEngine, classifier, peer median, HTTP, signal alerts, manual-send, biweekly refresh, Case B retry)
 │   └── backtest_baselines/      # Live-vs-live verify scripts (C-3 regression barrier)
 │
 ├── frontend/
@@ -299,6 +299,9 @@ Finance/
 | GET | `/api/screener/{symbol}` | Single-ticker screener row (verdict card in Ticker Lookup) |
 | POST | `/api/leaders/rebuild` | Kick off the quarterly Layer 1 rebuild pipeline |
 | GET | `/api/leaders/rebuild/status` | Poll rebuild progress (stage, % complete, last error) |
+| POST | `/api/alerts/send-manual` | Re-send the signal-brief email from the cached daily report |
+| GET | `/api/alerts/config` | SMTP enabled flag + recipient count for the manual-trigger confirmation dialog |
+| GET | `/api/backtest-refresh/status` | Biweekly backtest refresh status: last run, next run, Case B history |
 
 Strategy parameter: `?strategy=auto` (default), `?strategy=full`, `?strategy=buy_only`
 
@@ -306,11 +309,26 @@ Strategy parameter: `?strategy=auto` (default), `?strategy=full`, `?strategy=buy
 
 **Prediction warnings:** prediction responses include a `warnings` array; `stale_features_used` indicates today's feature row had NaN values and yesterday's features were used as fallback. Compare-card responses also mirror these as `v2_warnings` / `v3_warnings` at the top level.
 
+## Email Alerts
+
+After each scheduled scan (and on demand from the Daily Report's manual button), Quantfolio classifies every report row through `_classify_alert` ([api_server.py:125-179](api_server.py#L125-L179) — the canonical rule docstring) and emails a Signal Brief if anything qualifies:
+
+- **Consensus BUY** — both Lite and Pro signal BUY.
+- **Single-model BUY (Pro-only)** — Pro signals BUY, Lite=HOLD, validated when `best_strategy ∈ {pro_buyonly, pro_full}`.
+- **Single-model BUY (Lite-only)** — Lite signals BUY, Pro=HOLD, validated when `best_strategy ∈ {lite_buyonly, lite_full}`.
+- **SELL gate** — suppress if `best_strategy ∈ {buyhold, lite_buyonly, pro_buyonly}` (acting on a SELL would have hurt these tickers historically).
+- **SELL fires** only on `pro_full` + Pro=SELL or `lite_full` + Lite=SELL.
+- **Conflict** (Lite/Pro disagree BUY vs SELL) is never alerted.
+
+Each row in the email carries the ticker's SVR plus the industry-group peer median SVR for context (`_peer_svr_str`, [api_server.py:226-251](api_server.py#L226-L251)). The Daily Report tab also exposes a **Send Email Alert** button that re-fires the brief from the most recent cached report — useful if SMTP was misconfigured during the scheduled run.
+
 ## Scheduling
 
 When APScheduler is installed, the server automatically runs the dual-model report at **4:05 PM EST, Monday-Friday** (just after market close). Results are cached and served via `/api/report`.
 
 The Layer 1 pipeline rebuilds on a quarterly cadence: **Feb 15 / May 15 / Aug 15 / Nov 15 at 2 AM** (timed ~45 days after each 10-Q filing window closes, so fresh fundamentals are reflected in the next rebuild). Trigger a manual rebuild any time via the Leader Detector tab's **Rebuild Now** button or `POST /api/leaders/rebuild`.
+
+Every other Friday at 9 PM ET, a biweekly backtest refresh sweeps tickers whose cached backtest is older than 15 days. Tickers that fail with insufficient-data ("Case B") are deferred for 8 weeks before retry. Status: `GET /api/backtest-refresh/status`.
 
 Without APScheduler, trigger manually: `GET /api/report?refresh=true`
 
