@@ -1,6 +1,6 @@
 # How to Define a Good Firm
 
-A straightforward framework for identifying industry leaders and hidden gems, distilled from Nanalyze's research methodology across 49 newsletters.
+A straightforward framework for identifying high-quality businesses, distilled from Nanalyze's research methodology across 49 newsletters.
 
 > **Quantfolio integration:** this framework ships as `fundamental_screener.py` + `fundamental_metrics.py`, with **archetype-dispatched** tests (Phase 1.9, 2026-04-18) and a size-blind verdict (Round 9a, 2026-05-03). The runtime classifies each ticker as **GROWTH** or **MATURE** on a single Revenue-YoY cut, then applies a tailored 5-test rubric and per-archetype dealbreakers to emit one of four verdicts: **LEADER / WATCH / AVOID / INSUFFICIENT_DATA**. See the *Archetype Routing* section below for the current shape; the original Nanalyze core principles (Core Philosophy, the 5 business tests, SVR valuation, dealbreaker list) stay intact as the underlying business ideas.
 
