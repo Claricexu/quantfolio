@@ -66,7 +66,7 @@ Finance/
 │   └── TWO_LAYER_ARCHITECTURE_PLAN.md   # Decision log for the Layer 1 build
 │
 ├── Inputs
-│   ├── Tickers.csv               # Manual watchlist (85 symbols, union with leaders.csv)
+│   ├── Tickers.csv               # Manual watchlist (tickers you pick, union with leaders.csv)
 │   └── leaders.csv               # Layer 1 output (100 picks), gitignored
 │
 └── Config

@@ -15,7 +15,7 @@ index.html             <-->  api_server.py       -->    Lite model (RF + XGBoost
                                                          Yahoo Finance + Local CSV Cache
                                                          |
                                                          Universe = leaders.csv (100)
-                                                              ∪ Tickers.csv (85 manual)
+                                                              ∪ Tickers.csv (your watchlist)
                                                          ≈ 150 symbols (deduped)
 
                              Layer 1 — Leader Detector
@@ -267,7 +267,7 @@ Finance/
 │
 ├── frontend/
 │   └── index.html               # Dashboard UI (single-page app, 4 tabs)
-├── Tickers.csv                  # Manual watchlist (85 symbols, unions with leaders.csv)
+├── Tickers.csv                  # Manual watchlist (tickers you pick, unions with leaders.csv)
 ├── leaders.csv                  # Layer 1 output (100 automated picks)
 ├── screener_results.csv         # Full screener output (~1,400 rows; feeds Leader Detector tab)
 ├── universe_raw.csv             # Phase 1.0 output (2,501 SEC-registered tickers)
