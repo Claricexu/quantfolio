@@ -228,6 +228,181 @@ def _compute_dealbreakers(m, archetype):
     return {}  # UNKNOWN → no dealbreakers (will fall to INSUFFICIENT_DATA anyway)
 
 
+# ─── Forensic flags (Round May 15) ────────────────────────────────────────────
+# A SEPARATE layer from dealbreakers. Dealbreakers gate the verdict
+# (LEADER/WATCH/AVOID/INSUFFICIENT_DATA — pure quality, Round 9a invariant).
+# Forensic flags ride alongside on `forensic_flags_json` + `forensic_flag_count`
+# so downstream consumers (leader_selector pool filter, frontend chips) can
+# act on them without touching the verdict logic.
+#
+# Sector exclusions: banks, insurance, REITs file under accounting frameworks
+# where the flagged behaviour is normal (e.g. NI > OCF for an insurer is a
+# float-investment pattern, not a forensic concern). Exclusion is done by
+# SIC code range directly rather than by classifier triple — the classifier's
+# `industry_group` for banks ("Capital Markets") collides with REITs and with
+# V/MA payment-network overrides, and the `industry` tier is replaced with
+# SEC's free-text `sic_description` on the resolution path so the fallback
+# strings never appear on real rows.
+#
+#   - Banks/brokers/financial holding cos: SIC 6000-6299
+#   - Insurance carriers / agents:         SIC 6300-6499
+#   - Real Estate / Investment / REITs:    SIC 6500-6799
+#
+# Excludes ~all of SIC division H (Finance, Insurance, Real Estate). Payments
+# overrides (V/MA, classifier.TICKER_OVERRIDES) keep their own SIC code (6199)
+# so they fall in the bank-exclusion bucket too — which is fine, payment
+# networks have float-vs-cash dynamics that distort NI/OCF the same way banks
+# do. Trade-off accepted; revisit if a payments-specific carve-out becomes
+# necessary.
+
+# Override file: see _load_forensic_flag_overrides (commit 3 of this round).
+# Wired into the count below.
+
+
+def _get_forensic_overrides():
+    """Return the overrides dict for the current screener run, or None.
+
+    Commit 2 stub: returns None so the override path is a no-op. Commit 3
+    replaces this with a real loader that reads cache/forensic_flag_overrides.csv
+    once at the start of the run and caches it in module scope.
+    """
+    return None
+
+
+def _is_forensic_excluded_sector(m):
+    """True if this row's SIC code falls in the Finance/Insurance/Real Estate
+    division (SIC 6000-6799). Banks, insurers, and REITs file under accounting
+    frameworks where the flagged behaviours are normal."""
+    sic = m.get('sic')
+    if sic is None or sic == '':
+        return False
+    try:
+        sic_int = int(float(sic))
+    except (TypeError, ValueError):
+        return False
+    return 6000 <= sic_int <= 6799
+
+
+def _flag_ni_ocf_divergence(m):
+    """Flag if GAAP NetIncome > OperatingCashFlow for 3 consecutive FYs.
+
+    Returns False (not None) when histories are short — we don't fail-open
+    here because a partial history doesn't mean the divergence happened;
+    if the data isn't there we can't claim the flag, which is the same
+    semantically as "didn't trip."
+    """
+    ni = m.get('ni_3y_history') or []
+    ocf = m.get('ocf_3y_history') or []
+    if len(ni) < 3 or len(ocf) < 3:
+        return False
+    # Both lists are newest-first; require strict NI > OCF in every one
+    # of the last 3 fiscal years.
+    return all(
+        (n is not None and o is not None and n > o)
+        for n, o in zip(ni[:3], ocf[:3])
+    )
+
+
+def _flag_leverage_high(m):
+    """Flag if Net Debt / EBITDA > 4x AND Interest Coverage < 2x.
+
+    Combined AND threshold — both legs must trip. Net Debt > 0 and EBITDA
+    > 0 both required for the ratio to be meaningful (a cash-rich firm with
+    negative net debt should never flag, regardless of EBITDA shape).
+    """
+    nd = m.get('net_debt')
+    ebitda = m.get('ebitda_ttm')
+    icov = m.get('interest_coverage_ratio')
+    if nd is None or ebitda is None or icov is None:
+        return False
+    if ebitda <= 0:
+        # Negative or zero EBITDA — leverage is undefined here; the
+        # underlying problem already shows up in burning_cash + the
+        # rubric tests, no need to double-flag via this leg.
+        return False
+    if nd <= 0:
+        return False
+    nd_ebitda = nd / ebitda
+    return nd_ebitda > 4.0 and icov < 2.0
+
+
+def _flag_going_concern(m):
+    """Flag if SubstantialDoubtAboutGoingConcern XBRL fact is True.
+
+    NOT IMPLEMENTED — the canonical us-gaap tag is not exposed by SEC's
+    companyfacts/frames API. See fundamental_metrics.compute_metrics
+    `going_concern_present` stub for the full investigation. Kept as a
+    schema-stable False so the column count is consistent for the day
+    a 10-K-narrative-parsing pipeline lands.
+    """
+    return bool(m.get('going_concern_present'))
+
+
+def _flag_dilution_velocity(m):
+    """Flag if shares-outstanding YoY growth > 10% in the most recent year.
+
+    Complements the existing `flag_diluting` (15% over 3y), which can miss
+    a single-year burst that resets to baseline. Single-year > 10% is a
+    sharper detector for one-off raises / large equity issuances.
+    """
+    g = m.get('shares_outstanding_yoy_growth')
+    if g is None:
+        return False
+    return g > 0.10
+
+
+# Stable iteration order — frontend chips render in this order, count is
+# computed from the same map.
+FORENSIC_FLAGS = (
+    ('ni_ocf_divergence', _flag_ni_ocf_divergence),
+    ('leverage_high', _flag_leverage_high),
+    ('going_concern', _flag_going_concern),
+    ('dilution_velocity', _flag_dilution_velocity),
+)
+
+
+def _compute_forensic_flags(m, overrides=None):
+    """Round May 15 forensic flags. Mirrors `_compute_dealbreakers` in shape
+    but lives in its own column family — does NOT modify the Round 9a
+    verdict (LEADER/WATCH/AVOID/INSUFFICIENT_DATA stays pure quality).
+
+    Returns ``(flags_dict, count)`` where:
+      - ``flags_dict`` is the FULL raw map of every flag (including any
+        overridden-but-True flags) so the UI can show "suppressed" state.
+      - ``count`` is the number of flags that are True AND not currently
+        overridden — single source of truth per PATTERNS.md P-4.
+
+    Sector-excluded rows return ({}, 0) — banks/insurance/REITs file under
+    accounting frameworks where these behaviours are normal.
+
+    `overrides` is the dict produced by `_load_forensic_flag_overrides`,
+    ``{(symbol, flag_name): expires_at_date}``. None or empty dict skips
+    the override lookup entirely (so unit tests can call this without
+    touching the override CSV).
+    """
+    if _is_forensic_excluded_sector(m):
+        return {}, 0
+    raw = {name: bool(fn(m)) for name, fn in FORENSIC_FLAGS}
+
+    # Override: a flag is "suppressed" if (symbol, flag_name) is in the
+    # override map AND today's date < expires_at. Suppressed flags stay
+    # True in the raw map (so the UI can show them as overridden) but
+    # don't contribute to the count.
+    if overrides:
+        from datetime import date
+        sym = (m.get('symbol') or '').upper()
+        today = date.today()
+        suppressed = {
+            name for (s, name), exp in overrides.items()
+            if s == sym and today < exp
+        }
+    else:
+        suppressed = set()
+
+    count = sum(1 for name, v in raw.items() if v and name not in suppressed)
+    return raw, count
+
+
 # ─── Scoring + verdict ────────────────────────────────────────────────────────
 
 def score_ticker(metrics):
@@ -264,6 +439,13 @@ def score_ticker(metrics):
     dealbreakers = _compute_dealbreakers(m, archetype)
     any_dealbreaker = any(dealbreakers.values())
 
+    # Forensic flags — separate layer from dealbreakers, computed once here
+    # so leader_selector + leaders.csv + frontend rendering all read from
+    # the same column (PATTERNS.md P-4 single-source-of-truth).
+    forensic_flags, forensic_count = _compute_forensic_flags(
+        m, overrides=_get_forensic_overrides()
+    )
+
     # Score (0–100)
     #   5 tests × 15 pts = 75 max from tests
     #   + 10 for no dealbreakers (if we have data)
@@ -293,6 +475,9 @@ def score_ticker(metrics):
     m['good_firm_score'] = score
     m['verdict'] = verdict
     m['archetype'] = archetype
+    # Forensic flags — separate layer; verdict above is unchanged.
+    m['forensic_flags'] = forensic_flags
+    m['forensic_flag_count'] = forensic_count
     return m
 
 
@@ -550,6 +735,14 @@ CSV_OUT_FIELDS = [
     # these. Empty strings on legacy rows -> renders as dashes (graceful
     # degradation via testDot(None) and flagChips on {}).
     'tests_json', 'dealbreakers_json',
+    # Round May 15: forensic flags. SEPARATE layer from dealbreakers — does
+    # NOT modify the verdict (Round 9a invariant: verdicts encode pure
+    # quality). `forensic_flags_json` is the full raw map (suppressed flags
+    # included so the UI can render "overridden" state); `forensic_flag_count`
+    # is the count AFTER override application — single source of truth per
+    # PATTERNS.md P-4. leader_selector reads forensic_flag_count for pool
+    # eligibility (must == 0).
+    'forensic_flags_json', 'forensic_flag_count',
     # Round 7c (FB-1 data half): canonical industry_group + industry from
     # classifier.classify. The existing `sector` column above (kept in name
     # and order) is now also populated with the classifier sector instead of
@@ -594,6 +787,16 @@ def write_screener_csv(scored, path):
                 json.dumps(dealbreakers, separators=(',', ':'))
                 if dealbreakers else ''
             )
+            # Round May 15: forensic flags carry the full raw map (override-
+            # suppressed flags stay True in this map for UI transparency)
+            # and the count is computed after override application.
+            forensic = m.get('forensic_flags')
+            row['forensic_flags_json'] = (
+                json.dumps(forensic, separators=(',', ':'))
+                if forensic else ''
+            )
+            # forensic_flag_count is already a plain int; the bool/None
+            # normalization below would coerce 0 → '0' which is fine.
             # Normalize booleans and Nones for CSV cleanliness
             for k, v in list(row.items()):
                 if v is None:
