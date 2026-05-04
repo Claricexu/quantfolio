@@ -288,6 +288,16 @@ def _load_forensic_flag_overrides(path=None):
     Malformed rows (bad date, missing column, unknown flag) are SKIPPED
     with a stderr warning rather than raising — a typo in this file should
     not break the screener for the entire universe.
+
+    Encoding: UTF-8 is the preferred and documented format. Excel on Western
+    Windows saves CSV as cp1252 by default, however, so a strict UTF-8 read
+    that fails with ``UnicodeDecodeError`` falls back to cp1252 and emits a
+    one-line warning telling the operator to re-save as UTF-8 in a real
+    text editor. cp1252 maps every single byte to a code point so the
+    fallback decode itself never fails — anything that gets here is either
+    valid UTF-8 or valid cp1252. Everything else (missing file, malformed
+    CSV, etc.) keeps the existing behaviour: warn, return ``{}``, screener
+    proceeds with no overrides.
     """
     from datetime import date
     import csv as _csv
@@ -300,33 +310,46 @@ def _load_forensic_flag_overrides(path=None):
     valid_flags = {name for name, _fn in FORENSIC_FLAGS}
     out = {}
     try:
-        with path.open('r', newline='', encoding='utf-8') as f:
-            # Strip comment lines BEFORE handing to DictReader so '#' rows
-            # don't confuse the column parser.
-            lines = [ln for ln in f.read().splitlines()
-                     if ln.strip() and not ln.lstrip().startswith('#')]
-            if not lines:
-                return {}
-            reader = _csv.DictReader(lines)
-            for row in reader:
-                sym = (row.get('symbol') or '').strip().upper()
-                flag = (row.get('flag_name') or '').strip()
-                exp_raw = (row.get('expires_at') or '').strip()
-                if not sym or not flag or not exp_raw:
-                    continue
-                if flag not in valid_flags:
-                    print(f"  [warn] forensic override: unknown flag "
-                          f"'{flag}' for {sym} — skipping",
-                          file=_sys.stderr)
-                    continue
-                try:
-                    exp_date = date.fromisoformat(exp_raw)
-                except ValueError:
-                    print(f"  [warn] forensic override: bad expires_at "
-                          f"'{exp_raw}' for {sym}/{flag} — skipping",
-                          file=_sys.stderr)
-                    continue
-                out[(sym, flag)] = exp_date
+        raw_bytes = path.read_bytes()
+        try:
+            text = raw_bytes.decode('utf-8')
+        except UnicodeDecodeError as ude:
+            # Excel on Western Windows writes cp1252 by default. Fall back
+            # rather than failing — but tell the operator so they can fix
+            # the encoding drift at the source. cp1252 single-byte coverage
+            # means this decode itself does not fail.
+            text = raw_bytes.decode('cp1252')
+            print(f"  [warn] forensic override file is not UTF-8 "
+                  f"(utf-8 decode failed at byte {ude.start}); applied "
+                  f"cp1252 fallback. To prevent silent encoding drift, "
+                  f"save as UTF-8 in VS Code or a text editor.",
+                  file=_sys.stderr)
+        # Strip comment lines BEFORE handing to DictReader so '#' rows
+        # don't confuse the column parser.
+        lines = [ln for ln in text.splitlines()
+                 if ln.strip() and not ln.lstrip().startswith('#')]
+        if not lines:
+            return {}
+        reader = _csv.DictReader(lines)
+        for row in reader:
+            sym = (row.get('symbol') or '').strip().upper()
+            flag = (row.get('flag_name') or '').strip()
+            exp_raw = (row.get('expires_at') or '').strip()
+            if not sym or not flag or not exp_raw:
+                continue
+            if flag not in valid_flags:
+                print(f"  [warn] forensic override: unknown flag "
+                      f"'{flag}' for {sym} — skipping",
+                      file=_sys.stderr)
+                continue
+            try:
+                exp_date = date.fromisoformat(exp_raw)
+            except ValueError:
+                print(f"  [warn] forensic override: bad expires_at "
+                      f"'{exp_raw}' for {sym}/{flag} — skipping",
+                      file=_sys.stderr)
+                continue
+            out[(sym, flag)] = exp_date
     except Exception as e:
         print(f"  [warn] forensic override file unreadable ({path}): {e} "
               f"— proceeding with no overrides", file=_sys.stderr)

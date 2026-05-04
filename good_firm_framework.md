@@ -273,6 +273,7 @@ NVDA,ni_ocf_divergence,2027-01-01,SBC-heavy NI conversion lag is real but not fo
 - Lines starting with `#` are treated as comments — the schema example sits inline without polluting the override map.
 - Malformed rows (bad date, missing column, unknown flag) are skipped with a stderr warning rather than raising — a typo in this file shouldn't break the screener for the entire universe.
 - Read **once per process** at first access and cached at module level. Quarterly rebuild cadence makes this race-free; tests can call `reset_forensic_overrides_cache()` to reset between scenarios.
+- **Encoding tolerance.** UTF-8 is preferred and documented. If the strict UTF-8 read fails (which happens when Excel on Western Windows saves the file as cp1252 — its silent default), the loader retries with cp1252 and emits a one-line stderr warning naming the fallback. Anything that decodes as neither UTF-8 nor cp1252 falls through to the outer handler: warn, return `{}`, screener proceeds with no overrides. To avoid the fallback warning, re-save the file as UTF-8 in VS Code or any modern text editor — Excel's "CSV UTF-8 (Comma delimited)" export option also works.
 
 **Effect on a flagged row** when an override is active:
 

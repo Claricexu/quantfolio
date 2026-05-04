@@ -18,6 +18,8 @@ the flagged behaviour is normal, so all four flags are suppressed.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import sys
 import tempfile
@@ -385,6 +387,101 @@ def test_override_csv_only_comments_returns_empty_dict():
         assert overrides == {}
 
 
+# ─── 5b. Encoding tolerance (UTF-8 preferred, cp1252 fallback) ────────────
+
+
+def _override_text_with_emdash(future_iso):
+    """Compose a CSV body whose ``reason`` column contains an em-dash.
+
+    Em-dash is the canonical drift case: it's a single byte (0x97) in
+    cp1252 but a three-byte sequence (\\xe2\\x80\\x94) in UTF-8. Saving
+    a UTF-8 string in Excel on Western Windows rewrites it to cp1252,
+    which is exactly the failure mode the loader fix targets.
+    """
+    return (
+        'symbol,flag_name,expires_at,reason\n'
+        f'TEST,ni_ocf_divergence,{future_iso},Held — revisit Q1 2027\n'
+    )
+
+
+def test_override_csv_utf8_emdash_round_trips():
+    """UTF-8 happy path: reason field with em-dash decodes cleanly and
+    the override is loaded. Pins the preferred encoding contract — the
+    cp1252 fallback is only for the drift case, not the default."""
+    with tempfile.TemporaryDirectory() as tmp:
+        future = (date.today() + timedelta(days=365)).isoformat()
+        path = os.path.join(tmp, 'forensic_flag_overrides.csv')
+        # Path.write_bytes with UTF-8 encoding — what a modern editor
+        # would produce.
+        with open(path, 'wb') as f:
+            f.write(_override_text_with_emdash(future).encode('utf-8'))
+        # No fallback warning expected on this path.
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            overrides = _load_forensic_flag_overrides(path)
+        assert ('TEST', 'ni_ocf_divergence') in overrides, (
+            f"UTF-8 em-dash file should load; got {overrides}")
+        assert 'cp1252 fallback' not in buf.getvalue(), (
+            f"UTF-8 path must NOT emit the fallback warning; "
+            f"stderr was: {buf.getvalue()!r}")
+
+
+def test_override_csv_cp1252_emdash_falls_back_with_warning():
+    """cp1252 fallback path: the same content saved as cp1252 (Excel
+    default on Western Windows) must load with identical override-map
+    shape AND emit the specific fallback warning."""
+    with tempfile.TemporaryDirectory() as tmp:
+        future = (date.today() + timedelta(days=365)).isoformat()
+        path = os.path.join(tmp, 'forensic_flag_overrides.csv')
+        # The em-dash byte 0x97 alone is invalid UTF-8 (it's a lone
+        # continuation byte) but valid cp1252 — so this file fails the
+        # strict UTF-8 decode, then succeeds the cp1252 fallback.
+        with open(path, 'wb') as f:
+            f.write(_override_text_with_emdash(future).encode('cp1252'))
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            overrides = _load_forensic_flag_overrides(path)
+        # Override-map shape is identical to the UTF-8 case.
+        assert ('TEST', 'ni_ocf_divergence') in overrides, (
+            f"cp1252 fallback should still produce the override; "
+            f"got {overrides}")
+        # And the operator-facing warning fires so the encoding drift
+        # gets noticed at the source.
+        stderr = buf.getvalue()
+        assert 'cp1252 fallback' in stderr, (
+            f"fallback warning string must contain 'cp1252 fallback'; "
+            f"stderr was: {stderr!r}")
+        assert 'UTF-8' in stderr, (
+            f"fallback warning must hint at saving as UTF-8; "
+            f"stderr was: {stderr!r}")
+
+
+def test_override_csv_undecodable_returns_empty_dict():
+    """Truly malformed bytes — invalid UTF-8 AND invalid cp1252 — fall
+    through to the outer exception handler: warn, return ``{}``,
+    screener proceeds with no overrides.
+
+    Python's cp1252 codec is strict about a handful of undefined
+    positions (0x81, 0x8D, 0x8F, 0x90, 0x9D). 0x81 is also invalid as
+    a leading UTF-8 byte, so this byte fails BOTH decodes — exactly
+    the worst-case 'someone pasted from a weird source' scenario.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, 'forensic_flag_overrides.csv')
+        # A header row plus a body byte (0x81) that fails both codecs.
+        with open(path, 'wb') as f:
+            f.write(b'symbol,flag_name,expires_at,reason\n')
+            f.write(bytes([0x81]) + b'\n')
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            overrides = _load_forensic_flag_overrides(path)
+        assert overrides == {}, (
+            f"undecodable file should yield empty dict; got {overrides}")
+        assert 'unreadable' in buf.getvalue(), (
+            f"outer-handler warning expected; stderr was: "
+            f"{buf.getvalue()!r}")
+
+
 # ─── 6. Going-concern stub ────────────────────────────────────────────────
 
 
@@ -510,6 +607,13 @@ def run_all():
          test_override_csv_missing_returns_empty_dict),
         ("test_override_csv_only_comments_returns_empty_dict",
          test_override_csv_only_comments_returns_empty_dict),
+        # encoding tolerance (UTF-8 preferred, cp1252 fallback)
+        ("test_override_csv_utf8_emdash_round_trips",
+         test_override_csv_utf8_emdash_round_trips),
+        ("test_override_csv_cp1252_emdash_falls_back_with_warning",
+         test_override_csv_cp1252_emdash_falls_back_with_warning),
+        ("test_override_csv_undecodable_returns_empty_dict",
+         test_override_csv_undecodable_returns_empty_dict),
         # going-concern stub
         ("test_going_concern_stub_reads_metrics_layer_field_which_is_always_false",
          test_going_concern_stub_reads_metrics_layer_field_which_is_always_false),
