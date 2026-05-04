@@ -661,6 +661,13 @@
       </div>
     </div>
     <div id="leadersStatus"></div>
+    <!-- Round May 15: dismissible one-line legend explaining the red vs amber
+         chip semantics. Rendered into this slot by renderForensicLegend()
+         on tab-show, hidden once dismissed (localStorage key
+         legendForensicChipsDismissed). Visibility persists across reloads
+         so a user who dismissed it once doesn't have to dismiss every
+         time. -->
+    <div id="leadersForensicLegend"></div>
     <div id="leadersControls" style="display:none;margin-bottom:14px;padding:12px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px">
       <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center">
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
@@ -1127,6 +1134,85 @@ function archetypeChip(a) {
   return `<span style="display:inline-block;font-size:10px;font-weight:700;letter-spacing:0.5px;color:${c};background:rgba(255,255,255,0.03);border:1px solid ${c};padding:2px 8px;border-radius:10px;margin-left:10px;vertical-align:middle;text-transform:uppercase">${archetypeLabel(a)}</span>`;
 }
 
+// ── Round May 15: forensic flags (amber) ──
+// Sophia-locked label + tooltip copy. Three working flags + a going-concern
+// stub that currently always reports false on the backend (see
+// good_firm_framework.md "Forensic Flags" section for why the stub is
+// honest about its gap rather than silently absent).
+const FORENSIC_FLAG_DEFS = {
+  ni_ocf_divergence: {
+    label: 'Earnings ≠ Cash',
+    tooltip: 'Reported profit has outrun cash collected for 3 years running. Sometimes a sign of aggressive accounting; worth a closer look at receivables and accruals.',
+  },
+  leverage_high: {
+    label: 'High Leverage',
+    tooltip: 'Net debt is more than 4x EBITDA and earnings barely cover the interest. Limited room if rates rise or business slows.',
+  },
+  dilution_velocity: {
+    label: 'Sudden Dilution',
+    tooltip: 'Share count jumped more than 10% in a single year. Existing holders own a smaller slice; check whether it funded growth or covered a shortfall.',
+  },
+  going_concern: {
+    label: 'Going Concern',
+    // Going-concern stub never trips today, but the label + tooltip are
+    // wired in so the day a 10-K text-parser lands no frontend change is
+    // required. See good_firm_framework.md "Going Concern (deferred)".
+    tooltip: 'Auditor expressed substantial doubt about the company’s ability to continue operating for the next 12 months. Currently deferred pending 10-K text-parsing.',
+  },
+};
+
+// Coerce both serialization shapes (commit-5 enriched + commit-3 flat) into
+// a uniform [{name, value, suppressed}] list, in FORENSIC_FLAG_DEFS key
+// order so chip render order is stable across rows. Skips flags that are
+// false (no chip) and unknown flag keys (forward-compat: a future flag
+// added in the backend without a label here just doesn't render).
+function _normalizeForensicFlags(raw) {
+  if (!raw || typeof raw !== 'object') return [];
+  const out = [];
+  for (const name of Object.keys(FORENSIC_FLAG_DEFS)) {
+    if (!(name in raw)) continue;
+    const cell = raw[name];
+    let value, suppressed;
+    if (cell && typeof cell === 'object' && 'value' in cell) {
+      // Enriched shape from verdict_provider commit 5.
+      value = !!cell.value;
+      suppressed = !!cell.suppressed;
+    } else {
+      // Flat shape (legacy commit-3 CSV that hasn’t been re-screened).
+      // No suppression info available client-side, so render any active
+      // flag at full opacity — once the rebuild lands the enriched shape
+      // takes over automatically.
+      value = !!cell;
+      suppressed = false;
+    }
+    if (!value) continue;
+    out.push({ name, value, suppressed });
+  }
+  return out;
+}
+
+function forensicChipsHTML(raw) {
+  const flags = _normalizeForensicFlags(raw);
+  if (!flags.length) return '';
+  return flags.map(f => {
+    const def = FORENSIC_FLAG_DEFS[f.name];
+    let tip = def.tooltip;
+    let mutedSuffix = '';
+    let extraStyle = '';
+    if (f.suppressed) {
+      // sophia-locked override-active styling: dashed border + opacity 0.55 +
+      // " · muted" suffix inside the chip + tooltip note about the override.
+      tip += '— Suppressed by your override (cache/forensic_flag_overrides.csv)';
+      mutedSuffix = ' · muted';
+      extraStyle = 'opacity:0.55;border-style:dashed;';
+    }
+    // ASCII "[!]" prefix per sophia's cross-platform recommendation; the
+    // existing dealbreaker chips above use a "⚠" glyph, but we match
+    // sophia's spec here rather than the older pattern (locked design).
+    return `<span title="${escapeHTML(tip)}" style="display:inline-block;font-size:10px;font-weight:600;color:var(--yellow-text);background:var(--yellow-bg);border:1px solid var(--yellow-border);padding:2px 8px;border-radius:10px;letter-spacing:0.5px;${extraStyle}">[!] ${escapeHTML(def.label)}${mutedSuffix}</span>`;
+  }).join(' ');
+}
+
 function buildVerdictCard(v) {
   if (!v) return '';
   const verdict = v.verdict || 'INSUFFICIENT_DATA';
@@ -1184,10 +1270,25 @@ function buildVerdictCard(v) {
       ${testDot(tests[key])}
     </div>`).join('');
 
-  const flagChips = Object.entries(flags).filter(([,f]) => f).map(([k]) => {
+  // Round 9a / pre-existing: red dealbreaker chips (excludes from leader pool).
+  const dealbreakerChips = Object.entries(flags).filter(([,f]) => f).map(([k]) => {
     const lbl = ({ diluting:'Diluting', burning_cash:'Cash Burn', cagr_shrinking:'Shrinking Revenue', spac_or_microcap:'Micro-cap/SPAC' })[k] || k;
     return `<span style="display:inline-block;font-size:10px;font-weight:600;color:var(--red-text);background:var(--red-bg);border:1px solid var(--red-border);padding:2px 8px;border-radius:10px;letter-spacing:0.5px">\u26A0 ${lbl}</span>`;
   }).join(' ');
+
+  // Round May 15: amber forensic chips. Render AFTER red dealbreakers per
+  // sophia's locked sort order. Reads v.forensic_flags which arrives in
+  // either of two shapes from verdict_provider:
+  //   - Enriched (commit 5):  {flag: {value: bool, suppressed: bool}}
+  //   - Flat legacy fallback: {flag: bool}            (pre-commit-5 CSVs)
+  // forensicChipFor() coerces both to a uniform render and respects the
+  // suppressed flag for the dashed-border / opacity-muted "overridden"
+  // visual. The label and tooltip strings are LOCKED from sophia's review
+  // \u2014 change here if and only if good_firm_framework.md is updated.
+  const forensicChips = forensicChipsHTML(v.forensic_flags);
+
+  // Combined strip: dealbreakers (red) first, forensic flags (amber) second.
+  const flagChips = [dealbreakerChips, forensicChips].filter(Boolean).join(' ');
 
   // Round 7d Phase 3 / Commit 4: 3-column grid (Metric | Company | Peer Median).
   // Each row is [label, value, peerKey] where peerKey names the peer_median_*
@@ -3282,6 +3383,45 @@ const _STAGE_LABELS = {
   leader_select:  'Stage 4/4 \u00b7 Leader selection (Phase 1.4, <1 min)',
 };
 
+// Round May 15: one-line legend strip above the Leader Detector table.
+// Dismissible per-user via localStorage (key: legendForensicChipsDismissed).
+// Rendered every time loadLeaders() runs \u2014 cheap, idempotent, lets the
+// dismiss handler simply rewrite localStorage and call this again.
+const FORENSIC_LEGEND_KEY = 'legendForensicChipsDismissed';
+function renderForensicLegend() {
+  const slot = document.getElementById('leadersForensicLegend');
+  if (!slot) return;
+  let dismissed = false;
+  try { dismissed = localStorage.getItem(FORENSIC_LEGEND_KEY) === '1'; }
+  catch (e) { /* private mode / blocked storage \u2014 render every visit */ }
+  if (dismissed) { slot.innerHTML = ''; return; }
+  slot.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;
+                background:var(--bg-card);border:1px solid var(--border);
+                border-radius:8px;padding:8px 12px;margin-bottom:14px;
+                font-size:11px;color:var(--text-muted)">
+      <span style="flex:1">
+        <span style="color:var(--red-text);font-weight:600">Red chips</span>
+        = excludes from leader pool
+        <span style="color:var(--text-ghost);margin:0 6px">\u00b7</span>
+        <span style="color:var(--yellow-text);font-weight:600">Amber chips</span>
+        = accounting concerns, doesn't change verdict
+      </span>
+      <button type="button" onclick="dismissForensicLegend()"
+              aria-label="Dismiss this legend"
+              style="background:transparent;border:1px solid var(--border);
+                     color:var(--text-muted);font-size:11px;
+                     padding:2px 8px;border-radius:6px;cursor:pointer">
+        Dismiss
+      </button>
+    </div>`;
+}
+function dismissForensicLegend() {
+  try { localStorage.setItem(FORENSIC_LEGEND_KEY, '1'); }
+  catch (e) { /* ignore \u2014 best effort */ }
+  renderForensicLegend();
+}
+
 async function loadLeaders(force=false) {
   if (_leadersLoaded && !force) return;
   const status   = document.getElementById('leadersStatus');
@@ -3291,6 +3431,7 @@ async function loadLeaders(force=false) {
   status.innerHTML = '';
   content.innerHTML = loaderHTML('Loading leader universe\u2026');
   meta.textContent = '\u2014';
+  renderForensicLegend();
 
   try {
     // Fetch universe + leaders + current rebuild status in parallel. If either

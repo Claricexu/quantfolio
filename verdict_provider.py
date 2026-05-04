@@ -120,6 +120,10 @@ _INT_COLS = (
     # Round 7d: industry_group bucket size (independent of per-metric coverage).
     # Reserved for the future "n=12" tooltip on the verdict card peer column.
     "peer_count",
+    # Round May 15: number of active (non-suppressed) forensic flags. Read
+    # by leader_selector for pool eligibility; rendered as the chip count
+    # under the verdict card. Single source of truth per PATTERNS.md P-4.
+    "forensic_flag_count",
 )
 
 _BOOL_COLS = (
@@ -194,6 +198,22 @@ def _coerce_row(raw: dict[str, str]) -> dict[str, Any]:
             out["dealbreakers"] = {}
     else:
         out["dealbreakers"] = {}
+
+    # Round May 15: forensic flags. Shape on disk (commit 5):
+    #   {flag_name: {"value": bool, "suppressed": bool}}
+    # Empty / missing on legacy rows from pre-Round-May-15 CSVs → empty
+    # dict; the frontend's chip renderer treats that as "no chips" rather
+    # than dropping the row. Older flat shape ({flag_name: bool}) from a
+    # commit-3 CSV that hasn't been re-screened yet is preserved verbatim
+    # — flat-shape consumers in the frontend coerce both shapes uniformly.
+    fr_raw = out.pop("forensic_flags_json", None)
+    if fr_raw:
+        try:
+            out["forensic_flags"] = json.loads(fr_raw)
+        except (TypeError, ValueError):
+            out["forensic_flags"] = {}
+    else:
+        out["forensic_flags"] = {}
 
     # Keep symbol uppercase — the rest of the stack expects it.
     if out.get("symbol"):

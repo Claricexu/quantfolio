@@ -451,14 +451,18 @@ def _compute_forensic_flags(m, overrides=None):
     but lives in its own column family — does NOT modify the Round 9a
     verdict (LEADER/WATCH/AVOID/INSUFFICIENT_DATA stays pure quality).
 
-    Returns ``(flags_dict, count)`` where:
+    Returns ``(flags_dict, suppressed_set, count)`` where:
       - ``flags_dict`` is the FULL raw map of every flag (including any
         overridden-but-True flags) so the UI can show "suppressed" state.
+      - ``suppressed_set`` is the set of flag names whose override is
+        currently active (today < expires_at). The frontend uses this to
+        render dashed-border / opacity-muted chips for transparency about
+        which flags are present-but-overridden.
       - ``count`` is the number of flags that are True AND not currently
         overridden — single source of truth per PATTERNS.md P-4.
 
-    Sector-excluded rows return ({}, 0) — banks/insurance/REITs file under
-    accounting frameworks where these behaviours are normal.
+    Sector-excluded rows return ({}, set(), 0) — banks/insurance/REITs
+    file under accounting frameworks where these behaviours are normal.
 
     `overrides` is the dict produced by `_load_forensic_flag_overrides`,
     ``{(symbol, flag_name): expires_at_date}``. None or empty dict skips
@@ -466,7 +470,7 @@ def _compute_forensic_flags(m, overrides=None):
     touching the override CSV).
     """
     if _is_forensic_excluded_sector(m):
-        return {}, 0
+        return {}, set(), 0
     raw = {name: bool(fn(m)) for name, fn in FORENSIC_FLAGS}
 
     # Override: a flag is "suppressed" if (symbol, flag_name) is in the
@@ -485,7 +489,7 @@ def _compute_forensic_flags(m, overrides=None):
         suppressed = set()
 
     count = sum(1 for name, v in raw.items() if v and name not in suppressed)
-    return raw, count
+    return raw, suppressed, count
 
 
 # ─── Scoring + verdict ────────────────────────────────────────────────────────
@@ -526,8 +530,10 @@ def score_ticker(metrics):
 
     # Forensic flags — separate layer from dealbreakers, computed once here
     # so leader_selector + leaders.csv + frontend rendering all read from
-    # the same column (PATTERNS.md P-4 single-source-of-truth).
-    forensic_flags, forensic_count = _compute_forensic_flags(
+    # the same column (PATTERNS.md P-4 single-source-of-truth). The
+    # `forensic_flags_suppressed` set is consumed only by write_screener_csv
+    # to enrich the JSON serialization — it does not need its own column.
+    forensic_flags, forensic_suppressed, forensic_count = _compute_forensic_flags(
         m, overrides=_get_forensic_overrides()
     )
 
@@ -561,7 +567,12 @@ def score_ticker(metrics):
     m['verdict'] = verdict
     m['archetype'] = archetype
     # Forensic flags — separate layer; verdict above is unchanged.
+    # `forensic_flags` is the raw {name: bool} map (kept simple for
+    # consumers like tests and leader_selector that already read from
+    # forensic_flag_count anyway); the suppressed set is carried alongside
+    # so write_screener_csv can fold both into the per-flag JSON shape.
     m['forensic_flags'] = forensic_flags
+    m['forensic_flags_suppressed'] = forensic_suppressed
     m['forensic_flag_count'] = forensic_count
     return m
 
@@ -875,11 +886,29 @@ def write_screener_csv(scored, path):
             # Round May 15: forensic flags carry the full raw map (override-
             # suppressed flags stay True in this map for UI transparency)
             # and the count is computed after override application.
+            #
+            # Commit 5 (frontend round): serialize as a per-flag object
+            #   {flag_name: {"value": bool, "suppressed": bool}}
+            # rather than a flat {flag_name: bool}. This lets the frontend
+            # render an "overridden" chip with dashed border + muted text
+            # without needing to parse the override CSV client-side. The
+            # suppressed set comes from the same `_compute_forensic_flags`
+            # call that produced forensic_flag_count, so the count stays
+            # the single source of truth and the JSON is purely render data.
             forensic = m.get('forensic_flags')
-            row['forensic_flags_json'] = (
-                json.dumps(forensic, separators=(',', ':'))
-                if forensic else ''
-            )
+            suppressed = m.get('forensic_flags_suppressed') or set()
+            if forensic:
+                enriched = {
+                    name: {
+                        'value': bool(value),
+                        'suppressed': name in suppressed,
+                    }
+                    for name, value in forensic.items()
+                }
+                row['forensic_flags_json'] = json.dumps(
+                    enriched, separators=(',', ':'))
+            else:
+                row['forensic_flags_json'] = ''
             # forensic_flag_count is already a plain int; the bool/None
             # normalization below would coerce 0 → '0' which is fine.
             # Normalize booleans and Nones for CSV cleanliness
