@@ -507,6 +507,77 @@ def compute_metrics(symbol, sector_context=None, conn=None):
     flag_burning_cash = (ocf_ttm < 0) if (ocf_ttm is not None) else None
     flag_spac_or_microcap = (mcap < 500_000_000) if (mcap is not None) else None
 
+    # ─── Forensic-flag inputs (Round May 15) ──────────────────────────────
+    # Inputs only — the four forensic flags (ni_ocf_divergence, leverage_high,
+    # going_concern, dilution_velocity) are computed in fundamental_screener
+    # alongside the existing dealbreakers. The screener layer needs these raw
+    # series + scalar inputs.
+    #
+    # Net debt = LongTermDebt - Cash. Cash already extracted above; we just
+    # convert "missing both legs" into None rather than 0 - 0 = 0 (which
+    # would silently look like zero leverage).
+    long_term_debt = latest_instant(symbol, 'LongTermDebt', conn=conn)
+    if long_term_debt is None and cash == 0:
+        net_debt = None
+    else:
+        net_debt = (long_term_debt or 0) - (cash or 0)
+
+    # EBITDA TTM. Ideal: OperatingIncome + D&A. D&A is not currently cached
+    # in edgar_fetcher.XBRL_TAG_CHAINS (and adding it requires a separate
+    # round of taxonomy verification — DepreciationAndAmortization,
+    # DepreciationDepletionAndAmortization, AmortizationOfIntangibleAssets
+    # are aliased differently across filers). For this round we approximate
+    # EBITDA as OperatingIncomeLoss alone — a STRICTLY conservative choice
+    # for the leverage_high check (smaller denominator → higher Net Debt /
+    # EBITDA → more likely to flag, which matches forensic-flag intent of
+    # "false negatives are worse than false positives"). When D&A lands in
+    # the cache, swap to op_inc + dna here without changing the consumer.
+    ebitda_ttm = op_inc_ttm  # approximation; see comment above
+
+    # Interest coverage = EBITDA / |InterestExpense|. Interest expense is
+    # filed as a positive number (it's a cost); we still take abs() to be
+    # defensive against filers who tag it with a sign convention.
+    interest_expense_ttm = latest_ttm(symbol, 'InterestExpense', conn=conn)
+    interest_coverage_ratio = None
+    if (ebitda_ttm is not None and interest_expense_ttm is not None
+            and abs(interest_expense_ttm) > 0):
+        interest_coverage_ratio = ebitda_ttm / abs(interest_expense_ttm)
+
+    # NetIncome TTM — separate from the per-test rubric; needed for the
+    # ni_ocf_divergence flag (3-year history compared against OCF).
+    net_income_ttm = latest_ttm(symbol, 'NetIncomeLoss', conn=conn)
+
+    # 3-year fiscal-year histories of NetIncome and OCF, newest-first.
+    # Used by ni_ocf_divergence: flag if NI > OCF for 3 consecutive FYs.
+    # fy_series already dedups by end_date and picks the latest-restated
+    # value (Phase 1.7g) so the comparison is apples-to-apples even across
+    # filing restatements.
+    ni_3y_history = [v for _yr, v in fy_series(symbol, 'NetIncomeLoss',
+                                                years=3, conn=conn)]
+    ocf_3y_history = [v for _yr, v in fy_series(symbol, 'OperatingCashFlow',
+                                                 years=3, conn=conn)]
+
+    # Single-year YoY shares growth — complements `shares_growth_3y` (15%
+    # over 3y) with a sharper "any single year > 10%" detector. Uses
+    # WeightedAverageSharesBasic (already split-adjusted, see Phase 1.7c).
+    shares_outstanding_yoy_growth = None
+    if len(shares_series) >= 2:
+        s_now, s_prior = shares_series[0][1], shares_series[1][1]
+        if s_now and s_prior and s_prior > 0:
+            shares_outstanding_yoy_growth = s_now / s_prior - 1.0
+
+    # Going-concern XBRL Boolean: NOT IMPLEMENTED. The canonical us-gaap
+    # tag `SubstantialDoubtAboutGoingConcern` does NOT appear in SEC's
+    # companyfacts/frames API for known going-concern filers (verified
+    # against BIG/AMC/Wheels Up/RAD/BBBY/PRTYQ — all tagged as such in
+    # 10-K narrative but with zero matching tags in companyfacts). Going-
+    # concern is filed as text-block notes, which the companyfacts API
+    # does not surface. Detecting it would require a separate pipeline
+    # that parses 10-K filings directly (Item 8 / Auditor's Report),
+    # outside this round's scope. The flag is wired into the screener as
+    # always-False so the schema is stable for when this lands.
+    going_concern_present = False
+
     return {
         'symbol': symbol,
         'name': info.get('name'),
@@ -538,6 +609,16 @@ def compute_metrics(symbol, sector_context=None, conn=None):
         'shares_growth_3y': shares_growth_3y,
         'flag_burning_cash': flag_burning_cash,
         'flag_spac_or_microcap': flag_spac_or_microcap,
+        # Forensic-flag inputs (Round May 15) — consumed by
+        # fundamental_screener._compute_forensic_flags.
+        'net_debt': net_debt,
+        'ebitda_ttm': ebitda_ttm,
+        'interest_coverage_ratio': interest_coverage_ratio,
+        'net_income_ttm': net_income_ttm,
+        'ni_3y_history': ni_3y_history,
+        'ocf_3y_history': ocf_3y_history,
+        'shares_outstanding_yoy_growth': shares_outstanding_yoy_growth,
+        'going_concern_present': going_concern_present,
         # Metadata
         'data_status': info.get('status'),
         'data_fetched_at': info.get('last_fetched'),
@@ -573,6 +654,16 @@ def _empty_metrics(symbol, info):
         'shares_growth_3y': None,
         'flag_burning_cash': None,
         'flag_spac_or_microcap': (mcap < 500_000_000) if mcap else None,
+        # Forensic-flag inputs (Round May 15) — empty shell mirrors the
+        # full-metrics dict so downstream code never KeyErrors on these.
+        'net_debt': None,
+        'ebitda_ttm': None,
+        'interest_coverage_ratio': None,
+        'net_income_ttm': None,
+        'ni_3y_history': [],
+        'ocf_3y_history': [],
+        'shares_outstanding_yoy_growth': None,
+        'going_concern_present': False,
         'data_status': (info or {}).get('status', 'unknown'),
         'data_fetched_at': (info or {}).get('last_fetched'),
     }
