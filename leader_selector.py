@@ -82,6 +82,34 @@ def _is_dealbreaker(row):
     return False
 
 
+def _has_active_forensic_flags(row):
+    """True if `forensic_flag_count` > 0 on this row.
+
+    Round May 15: forensic flags (ni_ocf_divergence, leverage_high,
+    going_concern, dilution_velocity) ride alongside the verdict as a
+    SEPARATE quality signal — the verdict (LEADER/WATCH/AVOID/INSUFFICIENT_DATA)
+    encodes pure quality (Round 9a invariant), but the leaders pool excludes
+    any row carrying an unsuppressed forensic flag so Layer 2's training
+    set doesn't get polluted with rows that have a fatal-flaw signal the
+    rubric tests don't capture.
+
+    `forensic_flag_count` is computed once in the screener AFTER override
+    application — single source of truth per PATTERNS.md P-4. We read it
+    here without re-computing or re-applying overrides.
+
+    Empty/blank cell on legacy rows from pre-Round-May-15 screener_results.csv
+    parses as 0 — graceful degradation to the previous (forensic-flag-blind)
+    behaviour rather than dropping every row.
+    """
+    raw = row.get('forensic_flag_count', '')
+    if raw is None or raw == '':
+        return False
+    try:
+        return int(float(raw)) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _float(v, default=0.0):
     """Safe float coerce for sorting — never raises, treats blanks as default."""
     if v is None or v == '' or v == 'None':
@@ -142,15 +170,28 @@ def select_leaders(screener_rows, target_size=DEFAULT_TARGET_SIZE):
     """
     # Pre-filter: LEADER only, defensively drop any row carrying a
     # dealbreaker flag (should be impossible under the current verdict
-    # but we belt-and-brace).
+    # but we belt-and-brace), and drop any row with an active forensic
+    # flag (Round May 15 — see _has_active_forensic_flags). Forensic-
+    # flag drops are NOT defensive defence-in-depth: the verdict layer
+    # deliberately leaves forensic flags out so quality and forensic
+    # concerns stay separable on the row, and only the LEADER pool
+    # applies the filter.
     pool_leader = []
+    forensic_dropped = []
     for r in screener_rows:
         verdict = (r.get('verdict') or '').upper()
         if verdict != 'LEADER':
             continue
         if _is_dealbreaker(r):
             continue
+        if _has_active_forensic_flags(r):
+            forensic_dropped.append((r.get('symbol') or '').upper())
+            continue
         pool_leader.append(r)
+    # Stash the forensic-drop list on the function so main() can surface
+    # it in the under-fill log. Module-level state would couple the test
+    # harness; a closure-style attach keeps it scoped.
+    select_leaders._last_forensic_dropped = forensic_dropped
 
     def _sort_key(r):
         # Primary: score desc. Secondary: mcap desc. Stable, reproducible.
@@ -257,10 +298,18 @@ def main():
     # Round 9a: surface under-fill explicitly. WATCH no longer feeds into
     # leaders.csv — if LEADER count is consistently below the cap on real
     # universe runs, that's a signal to revisit the rubric or the cap.
+    # Round May 15: forensic-flag drops also reduce the eligible pool;
+    # log them separately so a low fill caused by forensic flags vs.
+    # genuinely-too-few-LEADERs is distinguishable in the rebuild log.
+    forensic_dropped = getattr(select_leaders, '_last_forensic_dropped', [])
     if len(selected) < args.target_size:
         print(f"\n[note] Under-fill: {len(selected)}/{args.target_size} "
               f"slots filled. Pool exhausted at the LEADER tier (WATCH "
               f"intentionally not eligible).")
+    if forensic_dropped:
+        print(f"[note] {len(forensic_dropped)} LEADER row(s) dropped by "
+              f"forensic-flag screen (forensic_flag_count > 0): "
+              f"{sorted(forensic_dropped)}")
 
     # Archetype split — quick eyeball for MATURE/GROWTH balance
     by_arch = {}
