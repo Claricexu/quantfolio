@@ -28,6 +28,9 @@ from tests.unit import (
     test_backrefresh_scheduler,
     test_case_b_retry,
     test_screener_verdict,
+    # Round May 15: forensic-flag layer + leader_selector pool filter.
+    test_forensic_flags,
+    test_leader_selector,
 )
 
 
@@ -49,6 +52,8 @@ def main() -> int:
         ("test_backrefresh_scheduler", test_backrefresh_scheduler),
         ("test_case_b_retry", test_case_b_retry),
         ("test_screener_verdict", test_screener_verdict),
+        ("test_forensic_flags", test_forensic_flags),
+        ("test_leader_selector", test_leader_selector),
     ):
         print(f"\n=== {name} ===")
         fails = mod.run_all()
