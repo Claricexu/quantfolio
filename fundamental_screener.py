@@ -259,14 +259,99 @@ def _compute_dealbreakers(m, archetype):
 # Wired into the count below.
 
 
-def _get_forensic_overrides():
-    """Return the overrides dict for the current screener run, or None.
+_FORENSIC_OVERRIDES_PATH = Path(__file__).resolve().parent / 'cache' / 'forensic_flag_overrides.csv'
 
-    Commit 2 stub: returns None so the override path is a no-op. Commit 3
-    replaces this with a real loader that reads cache/forensic_flag_overrides.csv
-    once at the start of the run and caches it in module scope.
+# Module-level cache. Loaded once on first access via `_get_forensic_overrides()`
+# and reused for the rest of the process. Quarterly rebuild reads it once at
+# the start; if the CSV is edited mid-rebuild the change is not picked up
+# until the next process — that's the documented contract (race-condition
+# avoidance per directive). Tests can reset this with `reset_overrides_cache()`.
+_FORENSIC_OVERRIDES_CACHE = None
+
+
+def _load_forensic_flag_overrides(path=None):
+    """Read cache/forensic_flag_overrides.csv into a dict.
+
+    Returns ``{(symbol_upper, flag_name): expires_at_date}``. Missing file
+    or empty file → empty dict (override path becomes a no-op, identical
+    to the commit-2 stub behaviour).
+
+    The file is read ONCE per process. If it's edited mid-rebuild, the
+    change is not picked up until the next screener invocation — this is
+    by design to keep the loader race-free during quarterly rebuilds.
+    Hot-reload would require either file-locking or a per-row mtime check,
+    neither of which is justified by current ops cadence (quarterly).
+
+    Lines starting with '#' are treated as comments so the schema example
+    can sit inline in the CSV without polluting the override map.
+
+    Malformed rows (bad date, missing column, unknown flag) are SKIPPED
+    with a stderr warning rather than raising — a typo in this file should
+    not break the screener for the entire universe.
     """
-    return None
+    from datetime import date
+    import csv as _csv
+    import sys as _sys
+
+    path = Path(path) if path else _FORENSIC_OVERRIDES_PATH
+    if not path.exists():
+        return {}
+
+    valid_flags = {name for name, _fn in FORENSIC_FLAGS}
+    out = {}
+    try:
+        with path.open('r', newline='', encoding='utf-8') as f:
+            # Strip comment lines BEFORE handing to DictReader so '#' rows
+            # don't confuse the column parser.
+            lines = [ln for ln in f.read().splitlines()
+                     if ln.strip() and not ln.lstrip().startswith('#')]
+            if not lines:
+                return {}
+            reader = _csv.DictReader(lines)
+            for row in reader:
+                sym = (row.get('symbol') or '').strip().upper()
+                flag = (row.get('flag_name') or '').strip()
+                exp_raw = (row.get('expires_at') or '').strip()
+                if not sym or not flag or not exp_raw:
+                    continue
+                if flag not in valid_flags:
+                    print(f"  [warn] forensic override: unknown flag "
+                          f"'{flag}' for {sym} — skipping",
+                          file=_sys.stderr)
+                    continue
+                try:
+                    exp_date = date.fromisoformat(exp_raw)
+                except ValueError:
+                    print(f"  [warn] forensic override: bad expires_at "
+                          f"'{exp_raw}' for {sym}/{flag} — skipping",
+                          file=_sys.stderr)
+                    continue
+                out[(sym, flag)] = exp_date
+    except Exception as e:
+        print(f"  [warn] forensic override file unreadable ({path}): {e} "
+              f"— proceeding with no overrides", file=_sys.stderr)
+        return {}
+    return out
+
+
+def _get_forensic_overrides():
+    """Return the overrides dict for the current screener run.
+
+    Lazy-loaded once and cached at module scope. Test code can call
+    ``reset_forensic_overrides_cache()`` to force re-read between scenarios.
+    """
+    global _FORENSIC_OVERRIDES_CACHE
+    if _FORENSIC_OVERRIDES_CACHE is None:
+        _FORENSIC_OVERRIDES_CACHE = _load_forensic_flag_overrides()
+    return _FORENSIC_OVERRIDES_CACHE
+
+
+def reset_forensic_overrides_cache():
+    """Clear the module-level overrides cache. Used by tests to swap in a
+    different override file between scenarios; production code does not
+    need to call this (the cache is right for the duration of one run)."""
+    global _FORENSIC_OVERRIDES_CACHE
+    _FORENSIC_OVERRIDES_CACHE = None
 
 
 def _is_forensic_excluded_sector(m):

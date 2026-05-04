@@ -1,0 +1,19 @@
+symbol,flag_name,expires_at,reason
+# Round May 15 forensic-flag override file. Lines starting with '#' are
+# treated as comments by the loader. Each non-comment row suppresses one
+# (symbol, flag_name) pair from forensic_flag_count until expires_at.
+#
+# Schema:
+#   symbol      — uppercase ticker (matches fundamentals.db symbol)
+#   flag_name   — one of: ni_ocf_divergence, leverage_high, going_concern,
+#                 dilution_velocity
+#   expires_at  — ISO date YYYY-MM-DD; override is active iff today < this
+#   reason      — free text; surfaced in audit logs and (future) UI tooltip
+#
+# When an override is active the flag still computes and ships in
+# forensic_flags_json (so the UI can render an "overridden" chip), but it
+# does NOT contribute to forensic_flag_count, which is what leader_selector
+# and the verdict card consume. Single source of truth per PATTERNS.md P-4.
+#
+# Example (commented out so it doesn't apply):
+# NVDA,ni_ocf_divergence,2027-01-01,SBC-heavy NI conversion lag is real but not forensic; revisit Q1 2027
