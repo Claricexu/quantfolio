@@ -414,11 +414,34 @@ def _flag_leverage_high(m):
 def _flag_going_concern(m):
     """Flag if SubstantialDoubtAboutGoingConcern XBRL fact is True.
 
-    NOT IMPLEMENTED — the canonical us-gaap tag is not exposed by SEC's
-    companyfacts/frames API. See fundamental_metrics.compute_metrics
-    `going_concern_present` stub for the full investigation. Kept as a
-    schema-stable False so the column count is consistent for the day
-    a 10-K-narrative-parsing pipeline lands.
+    STUB — always False today. This is a faithful passthrough on the
+    `going_concern_present` field; the stub-ness lives in the metrics
+    layer (fundamental_metrics.compute_metrics) which always sets that
+    field to False.
+
+    WHY STUBBED:
+      SEC files going-concern as narrative text in 10-K Item 8 (Auditor's
+      Report), not as a structured XBRL Boolean. Empirical probe of nine
+      known going-concern filers (BIG/AMC/Wheels Up/RAD/BBBY/PRTYQ + three
+      Cat-A failures) found zero exposure under SEC's companyfacts API —
+      see the inline comment in `fundamental_metrics.compute_metrics` for
+      the full investigation.
+
+    WHAT WOULD UNBLOCK:
+      A 10-K text-parsing pipeline (out of scope for May 15; tracked in
+      FEATURE_BACKLOG.md). When that lands and starts populating the
+      `going_concern_present` field with real True values, this function
+      will start tripping without any changes here — that's intentional.
+
+    CURRENT BEHAVIOR:
+      Always False (because the metrics layer always feeds False).
+
+    SCHEMA COMMITMENT:
+      The flag ships in forensic_flags_json on every non-sector-excluded
+      row, the override CSV accepts `flag_name=going_concern` for
+      forward-compat, and the frontend has a chip label + tooltip wired
+      in. Future-proof: when text-parsing lands, no consumer changes are
+      required.
     """
     return bool(m.get('going_concern_present'))
 

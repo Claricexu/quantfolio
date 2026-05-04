@@ -566,16 +566,43 @@ def compute_metrics(symbol, sector_context=None, conn=None):
         if s_now and s_prior and s_prior > 0:
             shares_outstanding_yoy_growth = s_now / s_prior - 1.0
 
-    # Going-concern XBRL Boolean: NOT IMPLEMENTED. The canonical us-gaap
-    # tag `SubstantialDoubtAboutGoingConcern` does NOT appear in SEC's
-    # companyfacts/frames API for known going-concern filers (verified
-    # against BIG/AMC/Wheels Up/RAD/BBBY/PRTYQ — all tagged as such in
-    # 10-K narrative but with zero matching tags in companyfacts). Going-
-    # concern is filed as text-block notes, which the companyfacts API
-    # does not surface. Detecting it would require a separate pipeline
-    # that parses 10-K filings directly (Item 8 / Auditor's Report),
-    # outside this round's scope. The flag is wired into the screener as
-    # always-False so the schema is stable for when this lands.
+    # ─── Going-concern XBRL Boolean: STUB (always False) ────────────────
+    #
+    # WHY STUBBED:
+    #   The canonical us-gaap tag `SubstantialDoubtAboutGoingConcern` does
+    #   NOT appear in SEC's companyfacts/frames API. Empirical probe of
+    #   nine known going-concern filers (BIG, AMC, Wheels Up, RAD, BBBY,
+    #   PRTYQ + three additional Cat-A failures) found zero exposure
+    #   under the companyfacts API even though every one of those filers
+    #   carried explicit going-concern language in their 10-K Item 8
+    #   (Auditor's Report). SEC files the signal as narrative text in
+    #   that section, not as a structured XBRL Boolean fact, so the data
+    #   we currently fetch (companyfacts JSON) literally cannot surface it.
+    #
+    # WHAT WOULD UNBLOCK:
+    #   A 10-K text-parsing pipeline that downloads the filing HTML and
+    #   reads the Auditor's Report. Detection would key off the standard
+    #   PCAOB phrase "substantial doubt about [the company's] ability to
+    #   continue as a going concern" plus a couple of common variants.
+    #   That's a separate project — out of scope for the May 15 forensic-
+    #   flag round and tracked in FEATURE_BACKLOG.md.
+    #
+    # CURRENT BEHAVIOR:
+    #   `going_concern_present` is hardcoded False on every row. The
+    #   downstream `_flag_going_concern` in fundamental_screener.py reads
+    #   this field as-is — so the going_concern entry in
+    #   forensic_flags_json is always False today.
+    #
+    # SCHEMA COMMITMENT:
+    #   The column slot ships in forensic_flags_json on every non-sector-
+    #   excluded row, the override CSV at cache/forensic_flag_overrides.csv
+    #   accepts `flag_name=going_concern` (verified by
+    #   tests/unit/test_forensic_flags.py), and the frontend has a chip
+    #   label + tooltip wired in. When the text-parsing pipeline lands and
+    #   starts feeding True values into this field, NO consumer changes
+    #   are required — the chip will start rendering, leader_selector
+    #   will start excluding flagged rows, and overrides for the flag
+    #   will start applying. That's the forward-compat contract.
     going_concern_present = False
 
     return {

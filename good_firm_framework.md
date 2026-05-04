@@ -210,6 +210,77 @@ Theoretical maximum: **95** (5 × 15 + 10 + 5 + 5). Round 9a removed an artifici
 
 Round 9a (2026-05-03) collapsed the prior LEADER/GEM split. Pre-9a the schema gated 5/5 winners on `market_cap_rank_in_sector ≤ 5` (LEADER) vs. `> 5` (GEM); both were the same quality tier but the verdict label encoded company size. With the split removed, verdicts encode pure quality; size context still rides on the row via `market_cap_rank_in_sector` (used by the moat-fallback test and surfaced in the Leader Detector table) but no longer steers the verdict label.
 
+---
+
+## Forensic Flags (Round May 15)
+
+A **separate layer from the verdict.** The verdict (LEADER/WATCH/AVOID/INSUFFICIENT_DATA) encodes pure business quality — Round 9a's invariant. Forensic flags ride alongside on `forensic_flags_json` + `forensic_flag_count` and warn about hidden accounting fragility on otherwise-good firms without modifying the verdict label. A 5/5 LEADER with a forensic flag is still a LEADER; the flag just means "look harder before sizing this position."
+
+The flags are written to `screener_results.csv` by `fundamental_screener._compute_forensic_flags`, surfaced as amber chips on the Verdict Card, and consumed by `leader_selector.py` to exclude flagged rows from `leaders.csv` (so Layer 2's training set isn't polluted by accounting outliers).
+
+### The three working flags
+
+| Flag | Threshold | What it means |
+|---|---|---|
+| `ni_ocf_divergence` | NetIncome > OperatingCashFlow for **3 consecutive fiscal years** (newest-first, strict `>` per year) | Reported profit has outrun cash collected. Sometimes a sign of aggressive accounting (working-capital build, accrual extensions, channel stuffing); worth a closer look at receivables and accruals. |
+| `leverage_high` | **Net Debt / EBITDA > 4x AND interest coverage < 2x** (AND threshold; both legs required) | Capital structure is stretched and earnings barely cover interest. Limited room if rates rise or business slows. EBITDA is approximated as OperatingIncomeLoss alone today (D&A is not in `XBRL_TAG_CHAINS` yet — strictly conservative for this check, makes the ratio more likely to trip). |
+| `dilution_velocity` | Shares-outstanding YoY growth > **10%** in the most recent year (strict `>`, not `>=`) | One-year burst of share issuance. Complements the existing `flag_diluting` dealbreaker (which is 15% over 3 years and can miss a single-year spike that resets to baseline). |
+
+### Sector exclusions (SIC 6000–6799)
+
+Banks, insurance carriers, and REITs are excluded from the entire forensic-flag layer because the flagged behaviours are normal under their accounting frameworks — an insurer's float-investment dynamics structurally produce NI > OCF, and a bank's leverage ratios live in a regime where Net Debt / EBITDA isn't a meaningful comparison. The exclusion is by SIC range:
+
+- SIC 6000–6299 — banks, brokers, financial holding companies
+- SIC 6300–6499 — insurance carriers and agents
+- SIC 6500–6799 — real estate, investment, REITs
+
+Excludes ~all of SEC SIC division H (Finance / Insurance / Real Estate). Done by raw SIC range rather than classifier triple because the classifier's `industry_group` for banks ("Capital Markets") collides with REITs and with the V/MA payment-network overrides — the SIC range is the canonical boundary on the actual filer's accounting framework.
+
+### Going Concern (deferred)
+
+A fourth flag — `going_concern` — was originally in scope for this round and is **deferred pending 10-K text-parsing infrastructure**. The honest gap:
+
+- The canonical us-gaap tag `SubstantialDoubtAboutGoingConcern` does **not** appear in SEC's companyfacts/frames API for known going-concern filers. Empirical probe of nine such filers (BIG, AMC, Wheels Up, RAD, BBBY, PRTYQ + three Cat-A failures) found zero exposure under the companyfacts JSON, even though every one of those filers carried explicit going-concern language in their Auditor's Report.
+- SEC files the signal as **narrative text in 10-K Item 8 (Auditor's Report)**, not as a structured XBRL Boolean fact. The companyfacts API surfaces structured facts only — text blocks aren't exposed.
+- Closing the gap requires a **10-K text-parsing pipeline** that downloads filing HTML and reads the Auditor's Report, keying off the standard PCAOB phrase "substantial doubt about [the company's] ability to continue as a going concern" plus a couple of common variants. That's a separate project; tracked in [FEATURE_BACKLOG.md](FEATURE_BACKLOG.md).
+
+The current behaviour is therefore **always False** — `_flag_going_concern` reads `m.get('going_concern_present')`, and the metrics layer hardcodes that field to False. The schema slot ships anyway: the flag appears in `forensic_flags_json` on every non-sector-excluded row, the override CSV accepts `flag_name=going_concern`, and the frontend has a chip label and tooltip wired in. When the text-parser lands and starts feeding True values into `going_concern_present`, no consumer changes are required — the chip starts rendering, leader_selector starts excluding flagged rows, and overrides for the flag start applying.
+
+This is intentional: the schema is forward-compat, the gap is honest, and the user knows not to trust this layer for going-concern detection in the meantime.
+
+### Override path
+
+False positives are inevitable on a flag set this sharp (NVDA, for example, correctly trips `ni_ocf_divergence` because of stock-based-compensation timing, but the underlying business is fine). The override path lets an operator suppress a specific `(symbol, flag_name)` until a chosen expiry date without changing detection logic.
+
+**File:** `cache/forensic_flag_overrides.csv` (gitignored is overridden — the file ships with a comment-only template).
+
+**Schema:**
+
+```
+symbol,flag_name,expires_at,reason
+NVDA,ni_ocf_divergence,2027-01-01,SBC-heavy NI conversion lag is real but not forensic; revisit Q1 2027
+```
+
+| Column | Meaning |
+|---|---|
+| `symbol` | Uppercase ticker (matches `fundamentals.db` symbol) |
+| `flag_name` | One of `ni_ocf_divergence`, `leverage_high`, `going_concern`, `dilution_velocity` |
+| `expires_at` | ISO date YYYY-MM-DD; override is active iff `today < expires_at` |
+| `reason` | Free text; surfaced in audit logs and (future) UI tooltip |
+
+**Loader semantics** (`fundamental_screener._load_forensic_flag_overrides`):
+
+- Lines starting with `#` are treated as comments — the schema example sits inline without polluting the override map.
+- Malformed rows (bad date, missing column, unknown flag) are skipped with a stderr warning rather than raising — a typo in this file shouldn't break the screener for the entire universe.
+- Read **once per process** at first access and cached at module level. Quarterly rebuild cadence makes this race-free; tests can call `reset_forensic_overrides_cache()` to reset between scenarios.
+
+**Effect on a flagged row** when an override is active:
+
+- The flag stays `True` in `forensic_flags_json` so the UI can render an "overridden" chip (dashed border, 0.55 opacity, " · muted" suffix on the label) — full transparency about which flags are present-but-suppressed.
+- The flag is excluded from `forensic_flag_count`, which is what `leader_selector` reads for pool eligibility — so the row is eligible for `leaders.csv` again.
+
+When the expiry passes, the override silently stops applying — the flag starts counting again on the next quarterly rebuild without any code change.
+
 ### Pre-1.9 Pseudocode (historical — retired)
 
 The original monolithic screen (no archetype routing, 5-way verdict with `HIDDEN_GEM` / `INDUSTRY_LEADER`) was replaced when it structurally under-counted mature cash-cows as AVOID. It's kept here as context for why the split exists:

@@ -349,6 +349,38 @@ Click any column header to sort (▲ / ▼). Click any row in the Leader Detecto
 
 > **What changed in Round 9a (2026-05-03):** the previous schema had a fifth tier called `GEM` for 5/5 winners outside the top-5 sector-rank slot. That label encoded company size into a quality verdict, which got confusing — a great small-cap business and a great mega-cap business both deserve the same quality label. They're now both `LEADER`. Size context still rides on the row via the **MKT CAP** and **SECTOR RANK** columns.
 
+### Forensic-flag chips on the Verdict Card (Round May 15)
+
+Click any row to open the Verdict Card. Beneath the score box, you may see two kinds of small pill chips:
+
+- **Red chips** (e.g. `Diluting`, `Cash Burn`, `Shrinking Revenue`) — **dealbreakers**. These flip the verdict to AVOID and exclude the company from `leaders.csv`. The pre-existing red chip set.
+- **Amber chips** (e.g. `[!] Earnings ≠ Cash`, `[!] High Leverage`, `[!] Sudden Dilution`) — **forensic flags**. New in Round May 15. These warn about hidden accounting fragility on otherwise-good firms. They do **not** change the verdict (a 5/5 LEADER with an amber chip is still a LEADER), but they do exclude the row from `leaders.csv` so Layer 2's training set isn't polluted by accounting outliers.
+
+When both kinds are present on the same row, red chips render first, then amber. A one-line legend strip above the table summarizes the distinction; click **Dismiss** on the legend to hide it for future visits.
+
+The three working amber flags:
+
+| Chip | What it means |
+|---|---|
+| **Earnings ≠ Cash** | Reported profit has outrun cash collected for 3 years running. Sometimes a sign of aggressive accounting; worth a closer look at receivables and accruals. |
+| **High Leverage** | Net debt is more than 4x EBITDA and earnings barely cover the interest. Limited room if rates rise or business slows. |
+| **Sudden Dilution** | Share count jumped more than 10% in a single year. Existing holders own a smaller slice; check whether it funded growth or covered a shortfall. |
+
+**Going-concern detection: known gap.** The system does not currently detect going-concern flags. Going concern is filed by the SEC as **narrative text in the 10-K Auditor's Report** (Item 8), not as a structured data field — the API we read doesn't surface text. We checked: nine known going-concern filers (AMC, BIG, Wheels Up, RAD, etc.) all carry going-concern language in their 10-K, none of them expose it as structured data. Detecting this requires a 10-K text-parsing pipeline that's not yet in scope. **Don't trust the system to flag going-concern on its own.** If you've read a company's Auditor's Report and it carries that language, treat it as a hard avoid regardless of what the chips say.
+
+The schema slot ships anyway, so when the text-parser eventually lands the chip will start appearing without further work on your end.
+
+### Overriding a forensic-flag false positive
+
+Forensic flags are sharp by design — false positives happen (NVDA correctly trips `Earnings ≠ Cash` because of stock-based-compensation timing, but the underlying business is fine). To suppress a specific flag for a specific ticker until a chosen date, edit `cache/forensic_flag_overrides.csv`:
+
+```
+symbol,flag_name,expires_at,reason
+NVDA,ni_ocf_divergence,2027-01-01,SBC-heavy NI conversion lag is real but not forensic; revisit Q1 2027
+```
+
+Lines starting with `#` are comments. The flag stays visible on the Verdict Card (dashed border, faded look, "· muted" suffix on the chip label) so you can see what's currently overridden, but it stops counting against the row for `leaders.csv` selection until the expiry date passes. Restart the dashboard or trigger a rebuild for changes to take effect.
+
 ### What GROWTH vs MATURE means
 
 The screener first sorts every company by **revenue growth**:
